@@ -8,7 +8,9 @@
     "lint:styles": "stylelint \"src/**/*.css\"",
     "format:check": "oxfmt --check",
     "format:fix": "oxfmt",
-    "types:check": "tsc -b"
+    "types:check": "tsc -b",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "packageManager": "pnpm@10.33.0",
   "dependencies": {
@@ -17,9 +19,12 @@
     "@mantine/nprogress": "^9.3.0",
     "@tabler/icons-react": "^3.44.0",
     "@tanstack/react-router": "^1.170.11",
+    "@xyflow/react": "^12.11.0",
     "core-js": "^3.49.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "zundo": "^2.3.0",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@rolldown/plugin-babel": "^0.2.3",
@@ -29,6 +34,7 @@
     "@types/react": "^19.2.16",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "@vitest/ui": "^4.1.8",
     "babel-plugin-react-compiler": "^1.0.0",
     "concurrently": "^10.0.3",
     "eslint": "^10.4.1",
@@ -36,6 +42,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-you-might-not-need-an-effect": "^1.0.0",
     "globals": "^17.6.0",
+    "jsdom": "^29.1.1",
     "oxfmt": "^0.53.0",
     "oxlint": "^1.68.0",
     "oxlint-tsgolint": "^0.23.0",
@@ -48,6 +55,7 @@
     "typescript-eslint": "^8.60.1",
     "vite": "^8.0.16",
     "vite-plugin-mkcert": "^2.1.0",
-    "vite-tsconfig-paths": "^6.1.1"
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "^4.1.8"
   }
 }

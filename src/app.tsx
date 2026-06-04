@@ -1,4 +1,9 @@
-import { MantineProvider } from '@mantine/core';
+import '@mantine/core/styles.css';
+import '@mantine/nprogress/styles.css';
+import '@xyflow/react/dist/style.css';
+import './index.css';
+
+import { Group, MantineProvider, Paper } from '@mantine/core';
 import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 
@@ -9,7 +14,18 @@ const router = createRouterConfig();
 const App = () => {
   return (
     <StrictMode>
-      <MantineProvider>
+      <MantineProvider
+        defaultColorScheme="dark"
+        theme={{
+          defaultRadius: 'lg',
+          components: {
+            Paper: Paper.extend({
+              defaultProps: { bg: 'dark.9', withBorder: true },
+            }),
+            Group: Group.extend({ defaultProps: { wrap: 'nowrap' } }),
+          },
+        }}
+      >
         <RouterProvider router={router} />
       </MantineProvider>
     </StrictMode>

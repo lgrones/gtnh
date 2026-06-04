@@ -1,0 +1,55 @@
+.node {
+  border-radius: var(--mantine-radius-md);
+  padding: var(--mantine-spacing-xs);
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 3px;
+    border-radius: var(--mantine-radius-md) 0 0 var(--mantine-radius-md);
+  }
+
+  &[data-source]::before {
+    background-color: var(--mantine-color-teal-filled);
+  }
+
+  &[data-target]::before {
+    background-color: var(--mantine-color-grape-filled);
+  }
+
+  &[data-both]::before {
+    background-color: var(--mantine-color-indigo-filled);
+  }
+}
+
+.inputs {
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+  gap: 0;
+}
+
+.input {
+  outline: none !important;
+  cursor: text;
+}
+
+.source {
+  top: 0;
+  left: 0;
+  transform: none;
+  background: transparent;
+  height: 100%;
+  width: 100%;
+  border-radius: 2px;
+  border: none;
+}
+
+.target {
+  top: 50%;
+  pointer-events: none;
+  opacity: 0;
+}

@@ -1,0 +1,11 @@
+/* stylelint-disable selector-class-pattern */
+.react-flow__node {
+  border: none;
+  padding: 0;
+  border-radius: var(--mantine-radius-md);
+  overflow: hidden;
+}
+
+.react-flow .react-flow__connectionline {
+  z-index: 0;
+}
