@@ -5,8 +5,10 @@ import {
   Stack,
   TextInput,
 } from '@mantine/core';
+import { usePrevious } from '@mantine/hooks';
 import { IconPlus, IconX } from '@tabler/icons-react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { useEffect, useRef } from 'react';
 import { useShallow } from 'zustand/shallow';
 
 import {
@@ -34,6 +36,25 @@ export const MachineNode = ({
       })),
     );
 
+  const prevLength = usePrevious(data.outputs.length);
+  const itemRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (
+      !itemRef.current ||
+      (prevLength !== undefined && prevLength >= data.outputs.length)
+    )
+      return;
+
+    itemRef.current.focus();
+  }, [data.outputs.length, prevLength]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+
+    addMachineOutput(id);
+  };
+
   return (
     <ProductionNode
       id={id}
@@ -53,7 +74,7 @@ export const MachineNode = ({
       }
     >
       <Stack gap="xs" mt="xs">
-        {data.outputs.map(output => (
+        {data.outputs.map((output, i, arr) => (
           <Group key={output.id} gap="xs" className={classes.row}>
             <NumberInput
               size="xs"
@@ -73,6 +94,7 @@ export const MachineNode = ({
 
             <TextInput
               size="xs"
+              radius={0}
               variant="unstyled"
               placeholder="Item"
               value={output.name}
@@ -81,6 +103,8 @@ export const MachineNode = ({
                   name: event.currentTarget.value,
                 })
               }
+              ref={i === arr.length - 1 ? itemRef : null}
+              onKeyDown={handleKeyDown}
             />
 
             <ActionIcon

@@ -30,16 +30,15 @@
 .input {
   outline: none !important;
   cursor: text;
+  padding-right: 6px;
 }
 
 .source {
-  top: 0;
-  left: 0;
-  transform: none;
-  background: transparent;
-  height: 100%;
-  width: 100%;
-  border-radius: 2px;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--node-color);
   border: none;
 }
 
@@ -47,6 +46,11 @@
   top: 50%;
   pointer-events: none;
   opacity: 0;
+}
+
+/* stylelint-disable-next-line selector-class-pattern */
+:global(.react-flow__node.selected) .node {
+  border: 1px solid var(--node-color);
 }
 
 .row {

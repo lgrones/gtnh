@@ -18,6 +18,7 @@ interface ProductionNodeProps extends NodeProps<Omit<IProductionNode, 'type'>> {
   // false for sink nodes whose name is driven by the connected output
   editable?: boolean;
   children?: React.ReactNode;
+  leftSection?: React.ReactNode;
   rightSection?: React.ReactNode;
 }
 
@@ -29,6 +30,7 @@ export const ProductionNode = ({
   editable = true,
   children,
   rightSection,
+  leftSection,
 }: ProductionNodeProps) => {
   const renameNode = useProductionStore(state => state.renameNode);
   const mounted = useMounted();
@@ -36,15 +38,29 @@ export const ProductionNode = ({
 
   useEffect(() => {
     if (!editable || !mounted || !inputRef.current) return;
+    const el = inputRef.current;
 
-    inputRef.current.focus();
+    // defer two frames past React Flow focusing the node wrapper, else it
+    // steals focus back and the highlighted name can't be typed over. nodes
+    // with a leftSection (e.g. input's quantity) need the extra frame.
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        el.focus();
 
-    const range = document.createRange();
-    range.selectNodeContents(inputRef.current);
+        const range = document.createRange();
+        range.selectNodeContents(el);
 
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      });
+    });
+
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
   }, [editable, mounted]);
 
   return (
@@ -56,11 +72,15 @@ export const ProductionNode = ({
         <Group className={classes.inputs}>
           <IconGripVertical size={20} className={DRAG_HANDLE_CLASS} />
 
+          {leftSection}
+
           <Text<'span'>
             span
             contentEditable={editable}
-            onChange={
-              editable ? e => renameNode(id, e.target.textContent) : undefined
+            onBlur={
+              editable
+                ? e => renameNode(id, e.currentTarget.textContent ?? '')
+                : undefined
             }
             className={classes.input}
             role="textbox"
@@ -86,6 +106,11 @@ export const ProductionNode = ({
           type="source"
           position={Position.Right}
           className={classes.source}
+          style={
+            {
+              '--node-color': `var(--mantine-color-${color}-filled)`,
+            } as React.CSSProperties
+          }
         />
       )}
     </>

@@ -28,6 +28,7 @@ export const ProductionFlow = () => {
             {...flowProps}
             nodeTypes={nodeTypes}
             connectionRadius={60}
+            deleteKeyCode={['Delete', 'Backspace']}
             onPaneClick={closeMenu}
             onMoveStart={closeMenu}
             colorMode="system"

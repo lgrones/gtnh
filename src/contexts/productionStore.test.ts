@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   useProductionStore,
+  type InputNodeData,
   type MachineNodeData,
+  type SinkNodeData,
   type ProductionNode,
   type ProductionNodeType,
 } from './productionStore';
@@ -63,9 +65,7 @@ describe('removeNode', () => {
   it('removes the node and any connected edges', () => {
     const a = addNode('machineNode');
     const b = addNode('machineNode');
-    store.setState({
-      edges: [{ id: 'e1', source: a, target: b }] as Edge[],
-    });
+    store.setState({ edges: [{ id: 'e1', source: a, target: b }] as Edge[] });
 
     state().removeNode(a);
 
@@ -89,26 +89,34 @@ describe('renameNode', () => {
   });
 });
 
+describe('setInputQuantity', () => {
+  it('updates an input node quantity', () => {
+    const id = addNode('inputNode');
+    state().setInputQuantity(id, 7);
+    expect((state().nodes[0]!.data as InputNodeData).quantity).toBe(7);
+  });
+
+  it('is a no-op on a non-input node', () => {
+    const id = addNode('outputNode');
+    state().setInputQuantity(id, 7);
+    expect((state().nodes[0]!.data as SinkNodeData).quantity).toBe(0);
+  });
+});
+
 describe('machine outputs', () => {
   it('adds an output with sensible defaults', () => {
     const id = addNode('machineNode');
     state().addMachineOutput(id);
     const data = state().nodes[0]!.data as MachineNodeData;
     expect(data.outputs).toHaveLength(1);
-    expect(data.outputs[0]).toMatchObject({
-      name: '',
-      quantity: 1,
-    });
+    expect(data.outputs[0]).toMatchObject({ name: '', quantity: 1 });
   });
 
   it('updates an existing output', () => {
     const id = addNode('machineNode');
     state().addMachineOutput(id);
     const outputId = (state().nodes[0]!.data as MachineNodeData).outputs[0]!.id;
-    state().updateMachineOutput(id, outputId, {
-      name: 'Slag',
-      quantity: 4,
-    });
+    state().updateMachineOutput(id, outputId, { name: 'Slag', quantity: 4 });
     const output = (state().nodes[0]!.data as MachineNodeData).outputs[0]!;
     expect(output).toMatchObject({ name: 'Slag', quantity: 4 });
   });
@@ -145,13 +153,14 @@ describe('onConnect', () => {
   });
 });
 
-describe('sink relabeling', () => {
+describe('sink sync', () => {
   // wire a machine output handle to a sink node, return [machineId, outputId, sinkId]
   const wire = (sinkType: ProductionNodeType) => {
     const machine = addNode('machineNode');
     state().addMachineOutput(machine);
-    const outputId = (state().nodes.find(n => n.id === machine)!
-      .data as MachineNodeData).outputs[0]!.id;
+    const outputId = (
+      state().nodes.find(n => n.id === machine)!.data as MachineNodeData
+    ).outputs[0]!.id;
     state().updateMachineOutput(machine, outputId, {
       name: 'Iron Plate',
       quantity: 4,
@@ -166,26 +175,23 @@ describe('sink relabeling', () => {
     return { machine, outputId, sink };
   };
 
-  it('renames an output node to "name xquantity" on connect', () => {
+  it('mirrors name + quantity onto an output node on connect', () => {
     const { sink } = wire('outputNode');
-    expect(state().nodes.find(n => n.id === sink)!.data.name).toBe(
-      'Iron Plate x4',
-    );
+    const data = state().nodes.find(n => n.id === sink)!.data as SinkNodeData;
+    expect(data).toMatchObject({ name: 'Iron Plate', quantity: 4 });
   });
 
-  it('renames a disposal node on connect too', () => {
+  it('mirrors onto a disposal node on connect too', () => {
     const { sink } = wire('disposalNode');
-    expect(state().nodes.find(n => n.id === sink)!.data.name).toBe(
-      'Iron Plate x4',
-    );
+    const data = state().nodes.find(n => n.id === sink)!.data as SinkNodeData;
+    expect(data).toMatchObject({ name: 'Iron Plate', quantity: 4 });
   });
 
-  it('propagates a later name/quantity edit to the connected sink', () => {
+  it('propagates a later quantity edit to the connected sink', () => {
     const { machine, outputId, sink } = wire('outputNode');
     state().updateMachineOutput(machine, outputId, { quantity: 9 });
-    expect(state().nodes.find(n => n.id === sink)!.data.name).toBe(
-      'Iron Plate x9',
-    );
+    const data = state().nodes.find(n => n.id === sink)!.data as SinkNodeData;
+    expect(data.quantity).toBe(9);
   });
 
   it('drops the dangling edge when the source output is removed', () => {
@@ -194,11 +200,41 @@ describe('sink relabeling', () => {
     expect(state().edges).toHaveLength(0);
   });
 
-  it('falls back to "Item" when the output has no name', () => {
+  it('lets a sink hold only one input — a new connection replaces the old', () => {
+    const m1 = addNode('machineNode');
+    state().addMachineOutput(m1);
+    const o1 = (state().nodes.find(n => n.id === m1)!.data as MachineNodeData)
+      .outputs[0]!.id;
+    const m2 = addNode('machineNode');
+    state().addMachineOutput(m2);
+    const o2 = (state().nodes.find(n => n.id === m2)!.data as MachineNodeData)
+      .outputs[0]!.id;
+    const sink = addNode('outputNode');
+
+    state().onConnect({
+      source: m1,
+      target: sink,
+      sourceHandle: o1,
+      targetHandle: null,
+    });
+    state().onConnect({
+      source: m2,
+      target: sink,
+      sourceHandle: o2,
+      targetHandle: null,
+    });
+
+    const incoming = state().edges.filter(e => e.target === sink);
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0]!.source).toBe(m2);
+  });
+
+  it('mirrors an unnamed output as-is (empty name, quantity 1)', () => {
     const machine = addNode('machineNode');
     state().addMachineOutput(machine);
-    const outputId = (state().nodes.find(n => n.id === machine)!
-      .data as MachineNodeData).outputs[0]!.id;
+    const outputId = (
+      state().nodes.find(n => n.id === machine)!.data as MachineNodeData
+    ).outputs[0]!.id;
     const sink = addNode('outputNode');
     state().onConnect({
       source: machine,
@@ -206,7 +242,132 @@ describe('sink relabeling', () => {
       sourceHandle: outputId,
       targetHandle: null,
     });
-    expect(state().nodes.find(n => n.id === sink)!.data.name).toBe('Item x1');
+    const data = state().nodes.find(n => n.id === sink)!.data as SinkNodeData;
+    expect(data).toMatchObject({ name: '', quantity: 1 });
+  });
+});
+
+describe('deselectAll', () => {
+  it('clears selection on nodes and edges', () => {
+    const a = addNode('inputNode');
+    store.setState({
+      nodes: state().nodes.map(n => ({ ...n, selected: true })),
+      edges: [{ id: 'e1', source: a, target: a, selected: true }] as Edge[],
+    });
+    state().deselectAll();
+    expect(state().nodes.every(n => !n.selected)).toBe(true);
+    expect(state().edges.every(e => !e.selected)).toBe(true);
+  });
+});
+
+describe('copy / paste', () => {
+  // mark a node selected (paste reads the `selected` flag)
+  const select = (id: string) =>
+    store.setState({
+      nodes: state().nodes.map(n =>
+        n.id === id ? { ...n, selected: true } : n,
+      ),
+    });
+
+  it('does nothing when the clipboard is empty', () => {
+    addNode('inputNode');
+    state().paste();
+    expect(state().nodes).toHaveLength(1);
+  });
+
+  it('pastes a fresh copy with new ids, offset and selected', () => {
+    const id = addNode('inputNode');
+    const original = state().nodes[0]!;
+    select(id);
+    state().copySelection();
+    state().paste();
+
+    expect(state().nodes).toHaveLength(2);
+    const copy = state().nodes[1]!;
+    expect(copy.id).not.toBe(id);
+    expect(copy.selected).toBe(true);
+    expect(copy.position).toEqual({
+      x: original.position.x + 32,
+      y: original.position.y + 32,
+    });
+    // original gets deselected so only the paste stays selected
+    expect(state().nodes[0]!.selected).toBe(false);
+  });
+
+  it('rewires copied edges + machine output handles to the new nodes', () => {
+    const machine = addNode('machineNode');
+    state().addMachineOutput(machine);
+    const outputId = (
+      state().nodes.find(n => n.id === machine)!.data as MachineNodeData
+    ).outputs[0]!.id;
+    const sink = addNode('outputNode');
+    state().onConnect({
+      source: machine,
+      target: sink,
+      sourceHandle: outputId,
+      targetHandle: null,
+    });
+    select(machine);
+    select(sink);
+    state().copySelection();
+    state().paste();
+
+    // 2 originals + 2 copies
+    expect(state().nodes).toHaveLength(4);
+    expect(state().edges).toHaveLength(2);
+
+    const pastedMachine = state().nodes.find(
+      n => n.id !== machine && n.type === 'machineNode',
+    )!;
+    const pastedSink = state().nodes.find(
+      n => n.id !== sink && n.type === 'outputNode',
+    )!;
+    const pastedOutputId = (pastedMachine.data as MachineNodeData).outputs[0]!
+      .id;
+    const pastedEdge = state().edges.find(e => e.source === pastedMachine.id)!;
+
+    expect(pastedEdge.target).toBe(pastedSink.id);
+    expect(pastedEdge.sourceHandle).toBe(pastedOutputId);
+    expect(pastedOutputId).not.toBe(outputId);
+  });
+
+  it('excludes edges that leave the copied selection', () => {
+    const machine = addNode('machineNode');
+    state().addMachineOutput(machine);
+    const outputId = (
+      state().nodes.find(n => n.id === machine)!.data as MachineNodeData
+    ).outputs[0]!.id;
+    const sink = addNode('outputNode');
+    state().onConnect({
+      source: machine,
+      target: sink,
+      sourceHandle: outputId,
+      targetHandle: null,
+    });
+    // copy only the machine — the edge to the sink must not come along
+    select(machine);
+    state().copySelection();
+    state().paste();
+
+    expect(state().clipboard!.edges).toHaveLength(0);
+    expect(state().edges).toHaveLength(1);
+  });
+});
+
+describe('delete via change handlers', () => {
+  it('removes a node through onNodesChange', () => {
+    const a = addNode('inputNode');
+    addNode('outputNode');
+    state().onNodesChange([{ type: 'remove', id: a }]);
+    expect(state().nodes.map(n => n.type)).toEqual(['outputNode']);
+  });
+
+  it('removes an edge through onEdgesChange', () => {
+    store.setState({
+      edges: [{ id: 'e1', source: 'a', target: 'b' }] as Edge[],
+    });
+    state().onEdgesChange([{ type: 'remove', id: 'e1' }]);
+    expect(state().edges).toHaveLength(0);
   });
 });
 
@@ -228,7 +389,12 @@ describe('reset', () => {
     flushHistory();
 
     const nodes: ProductionNode[] = [
-      { id: 'n1', type: 'inputNode', position: { x: 1, y: 2 }, data: { name: 'Ore' } },
+      {
+        id: 'n1',
+        type: 'inputNode',
+        position: { x: 1, y: 2 },
+        data: { name: 'Ore', quantity: 1 },
+      },
     ];
     const edges: Edge[] = [];
     state().reset(nodes, edges);
