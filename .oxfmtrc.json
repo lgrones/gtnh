@@ -1,0 +1,31 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 80,
+  "singleQuote": true,
+  "arrowParens": "avoid",
+  "objectWrap": "collapse",
+  "jsdoc": { "separateReturnsFromParam": true },
+  "sortImports": {
+    "groups": [
+      ["side_effect"],
+      "builtin",
+      "external",
+      ["internal", "subpath"],
+      ["parent", "sibling", "index"],
+      "style",
+      "unknown"
+    ]
+  },
+  "ignorePatterns": [
+    ".vscode",
+    ".tanstack",
+    ".claude",
+    "build",
+    "dist",
+    "node_modules",
+    "test_coverage",
+    "test_result",
+    "public",
+    "routeTree.gen.ts"
+  ]
+}

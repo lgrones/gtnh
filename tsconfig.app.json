@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "lib": ["ES2024", "dom", "dom.iterable", "ESNext.Iterator"],
+    "target": "es2022",
+    "skipLibCheck": true,
+    "composite": true,
+    "noEmit": true,
+
+    "module": "preserve",
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "useDefineForClassFields": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "useUnknownInCatchVariables": true,
+
+    "types": ["node", "react", "react-dom", "vite/client"],
+
+    "paths": {
+      "@/api/*": ["./src/api/*"],
+      "@/application/*": ["./src/application/*"],
+      "@/components/*": ["./src/components/*"],
+      "@/contexts/*": ["./src/contexts/*"],
+      "@/domain/*": ["./src/domain/*"],
+      "@/hooks/*": ["./src/hooks/*"],
+      "@/infrastructure/*": ["./src/infrastructure/*"],
+      "@/lib/*": ["./src/lib/*"],
+      "@/tests/*": ["./tests/*"]
+    }
+  },
+  "include": ["src", "tests"]
+}

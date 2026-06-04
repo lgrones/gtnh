@@ -1,0 +1,53 @@
+{
+  "name": "gtnh",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vite",
+    "validate": "concurrently \"pnpm lint\" \"pnpm lint:styles\" \"pnpm format:check\" \"pnpm types:check\" -p name -n \"Lint,Styles,Format,TS\" -c \"magenta,cyan,yellow,blue\"",
+    "lint": "oxlint && eslint",
+    "lint:styles": "stylelint \"src/**/*.css\"",
+    "format:check": "oxfmt --check",
+    "format:fix": "oxfmt",
+    "types:check": "tsc -b"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "dependencies": {
+    "@mantine/core": "^9.3.0",
+    "@mantine/hooks": "^9.3.0",
+    "@mantine/nprogress": "^9.3.0",
+    "@tabler/icons-react": "^3.44.0",
+    "@tanstack/react-router": "^1.170.11",
+    "core-js": "^3.49.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@rolldown/plugin-babel": "^0.2.3",
+    "@tanstack/eslint-plugin-router": "^1.162.0",
+    "@tanstack/router-plugin": "^1.168.14",
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.16",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "concurrently": "^10.0.3",
+    "eslint": "^10.4.1",
+    "eslint-plugin-oxlint": "^1.68.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-you-might-not-need-an-effect": "^1.0.0",
+    "globals": "^17.6.0",
+    "oxfmt": "^0.53.0",
+    "oxlint": "^1.68.0",
+    "oxlint-tsgolint": "^0.23.0",
+    "postcss": "^8.5.15",
+    "postcss-preset-mantine": "^1.18.0",
+    "postcss-simple-vars": "^7.0.1",
+    "stylelint": "^17.12.0",
+    "stylelint-config-standard-scss": "^17.0.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.60.1",
+    "vite": "^8.0.16",
+    "vite-plugin-mkcert": "^2.1.0",
+    "vite-tsconfig-paths": "^6.1.1"
+  }
+}
