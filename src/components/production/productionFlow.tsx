@@ -27,10 +27,11 @@ export const ProductionFlow = () => {
           <ReactFlow
             {...flowProps}
             nodeTypes={nodeTypes}
+            connectionRadius={60}
             onPaneClick={closeMenu}
             onMoveStart={closeMenu}
             colorMode="system"
-            proOptions={{ hideAttribution: true }}
+            snapToGrid
             fitView
             style={
               {
@@ -38,6 +39,7 @@ export const ProductionFlow = () => {
                 '--xy-background-color-default': 'transparent',
               } as CSSProperties
             }
+            proOptions={{ hideAttribution: true }}
           >
             <MiniMap />
             <Background />

@@ -98,7 +98,6 @@ describe('machine outputs', () => {
     expect(data.outputs[0]).toMatchObject({
       name: '',
       quantity: 1,
-      disposal: false,
     });
   });
 
@@ -109,10 +108,9 @@ describe('machine outputs', () => {
     state().updateMachineOutput(id, outputId, {
       name: 'Slag',
       quantity: 4,
-      disposal: true,
     });
     const output = (state().nodes[0]!.data as MachineNodeData).outputs[0]!;
-    expect(output).toMatchObject({ name: 'Slag', quantity: 4, disposal: true });
+    expect(output).toMatchObject({ name: 'Slag', quantity: 4 });
   });
 
   it('removes an output', () => {
@@ -144,6 +142,71 @@ describe('onConnect', () => {
     });
     expect(state().edges).toHaveLength(1);
     expect(state().edges[0]!.animated).toBe(true);
+  });
+});
+
+describe('sink relabeling', () => {
+  // wire a machine output handle to a sink node, return [machineId, outputId, sinkId]
+  const wire = (sinkType: ProductionNodeType) => {
+    const machine = addNode('machineNode');
+    state().addMachineOutput(machine);
+    const outputId = (state().nodes.find(n => n.id === machine)!
+      .data as MachineNodeData).outputs[0]!.id;
+    state().updateMachineOutput(machine, outputId, {
+      name: 'Iron Plate',
+      quantity: 4,
+    });
+    const sink = addNode(sinkType);
+    state().onConnect({
+      source: machine,
+      target: sink,
+      sourceHandle: outputId,
+      targetHandle: null,
+    });
+    return { machine, outputId, sink };
+  };
+
+  it('renames an output node to "name xquantity" on connect', () => {
+    const { sink } = wire('outputNode');
+    expect(state().nodes.find(n => n.id === sink)!.data.name).toBe(
+      'Iron Plate x4',
+    );
+  });
+
+  it('renames a disposal node on connect too', () => {
+    const { sink } = wire('disposalNode');
+    expect(state().nodes.find(n => n.id === sink)!.data.name).toBe(
+      'Iron Plate x4',
+    );
+  });
+
+  it('propagates a later name/quantity edit to the connected sink', () => {
+    const { machine, outputId, sink } = wire('outputNode');
+    state().updateMachineOutput(machine, outputId, { quantity: 9 });
+    expect(state().nodes.find(n => n.id === sink)!.data.name).toBe(
+      'Iron Plate x9',
+    );
+  });
+
+  it('drops the dangling edge when the source output is removed', () => {
+    const { machine, outputId } = wire('outputNode');
+    state().removeMachineOutput(machine, outputId);
+    expect(state().edges).toHaveLength(0);
+  });
+
+  it('falls back to "Item" when the output has no name', () => {
+    const machine = addNode('machineNode');
+    state().addMachineOutput(machine);
+    const outputId = (state().nodes.find(n => n.id === machine)!
+      .data as MachineNodeData).outputs[0]!.id;
+    const sink = addNode('outputNode');
+    state().onConnect({
+      source: machine,
+      target: sink,
+      sourceHandle: outputId,
+      targetHandle: null,
+    });
+    expect(state().nodes.find(n => n.id === sink)!.data.name).toBe('Item x1');
   });
 });
 

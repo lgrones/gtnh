@@ -1,6 +1,8 @@
-import { Group, Paper, Text } from '@mantine/core';
+import { Group, Paper, Text, type MantineColor } from '@mantine/core';
+import { useMounted } from '@mantine/hooks';
 import { IconGripVertical } from '@tabler/icons-react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import React, { useEffect, useRef } from 'react';
 
 import {
   DRAG_HANDLE_CLASS,
@@ -11,42 +13,78 @@ import {
 import classes from './productionNode.module.css';
 
 interface ProductionNodeProps extends NodeProps<Omit<IProductionNode, 'type'>> {
-  type: 'target' | 'source' | 'both';
+  color: MantineColor;
+  type: 'source' | 'target';
+  // false for sink nodes whose name is driven by the connected output
+  editable?: boolean;
+  children?: React.ReactNode;
+  rightSection?: React.ReactNode;
 }
 
-export const ProductionNode = ({ id, data, type }: ProductionNodeProps) => {
+export const ProductionNode = ({
+  id,
+  data,
+  type,
+  color,
+  editable = true,
+  children,
+  rightSection,
+}: ProductionNodeProps) => {
   const renameNode = useProductionStore(state => state.renameNode);
+  const mounted = useMounted();
+  const inputRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!editable || !mounted || !inputRef.current) return;
+
+    inputRef.current.focus();
+
+    const range = document.createRange();
+    range.selectNodeContents(inputRef.current);
+
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }, [editable, mounted]);
 
   return (
     <>
-      <Paper className={classes.node} mod={[type]}>
+      <Paper
+        className={classes.node}
+        style={{ '--node-color': `var(--mantine-color-${color}-filled)` }}
+      >
         <Group className={classes.inputs}>
-          <IconGripVertical className={DRAG_HANDLE_CLASS} />
+          <IconGripVertical size={20} className={DRAG_HANDLE_CLASS} />
 
-          <Text
+          <Text<'span'>
             span
-            contentEditable
-            onChange={e => renameNode(id, e.target.textContent)}
+            contentEditable={editable}
+            onChange={
+              editable ? e => renameNode(id, e.target.textContent) : undefined
+            }
             className={classes.input}
             role="textbox"
-          >
-            {data.name}
-          </Text>
+            ref={inputRef}
+            dangerouslySetInnerHTML={{ __html: data.name }}
+          />
+
+          {rightSection}
         </Group>
+        {children}
       </Paper>
 
-      {type !== 'source' && (
+      {type === 'target' && (
         <Handle
           type="target"
-          position={Position.Top}
+          position={Position.Left}
           className={classes.target}
         />
       )}
 
-      {type !== 'target' && (
+      {type === 'source' && (
         <Handle
           type="source"
-          position={Position.Top}
+          position={Position.Right}
           className={classes.source}
         />
       )}

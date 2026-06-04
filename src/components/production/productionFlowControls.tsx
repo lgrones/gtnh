@@ -36,6 +36,7 @@ export const ProductionFlowControls = ({
     ['CTRL+I', () => add('inputNode')],
     ['CTRL+O', () => add('outputNode')],
     ['CTRL+M', () => add('machineNode')],
+    ['CTRL+D', () => add('disposalNode')],
     ['CTRL+Z', () => undo()],
     ['CTRL+Y', () => redo()],
   ]);
@@ -78,6 +79,17 @@ export const ProductionFlowControls = ({
           }
         >
           Machine
+        </Menu.Item>
+
+        <Menu.Item
+          onClick={() => add('disposalNode')}
+          rightSection={
+            <Text size="xs" c="dimmed">
+              Ctrl+D
+            </Text>
+          }
+        >
+          Disposal
         </Menu.Item>
 
         <Menu.Divider />

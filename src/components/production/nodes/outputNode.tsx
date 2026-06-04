@@ -7,5 +7,5 @@ import { ProductionNode } from './productionNode';
 type OutputNodeType = Extract<IProductionNode, { type: 'outputNode' }>;
 
 export const OutputNode = (props: NodeProps<OutputNodeType>) => (
-  <ProductionNode {...props} type="target" />
+  <ProductionNode {...props} type="target" color="grape" editable={false} />
 );

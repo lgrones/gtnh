@@ -14,7 +14,11 @@ import { persist } from 'zustand/middleware';
 import { create } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 
-export type ProductionNodeType = 'inputNode' | 'outputNode' | 'machineNode';
+export type ProductionNodeType =
+  | 'inputNode'
+  | 'outputNode'
+  | 'machineNode'
+  | 'disposalNode';
 
 // class on the grip element; React Flow's dragHandle selector targets it (needs leading dot)
 export const DRAG_HANDLE_CLASS = 'drag-handle_production';
@@ -24,7 +28,6 @@ export interface MachineOutput {
   id: string; // crypto.randomUUID()
   name: string; // editable item name
   quantity: number; // amount produced per cycle
-  disposal: boolean; // true = output is discarded, not consumed downstream
 }
 
 // shared by every node — editable display name
@@ -34,6 +37,7 @@ export interface BaseNodeData extends Record<string, unknown> {
 
 export type InputNodeData = BaseNodeData;
 export type OutputNodeData = BaseNodeData;
+export type DisposalNodeData = BaseNodeData;
 export interface MachineNodeData extends BaseNodeData {
   outputs: MachineOutput[];
 }
@@ -42,6 +46,7 @@ export interface MachineNodeData extends BaseNodeData {
 export type ProductionNode =
   | Node<InputNodeData, 'inputNode'>
   | Node<OutputNodeData, 'outputNode'>
+  | Node<DisposalNodeData, 'disposalNode'>
   | Node<MachineNodeData, 'machineNode'>;
 
 interface ProductionState {
@@ -100,7 +105,6 @@ const debounce = <Args extends unknown[]>(
   };
 };
 
-// build a fresh node with default data matching its type
 const createNode = (
   type: ProductionNodeType,
   position: { x: number; y: number },
@@ -118,6 +122,8 @@ const createNode = (
       return { ...base, type, data: { name: 'Input' } };
     case 'outputNode':
       return { ...base, type, data: { name: 'Output' } };
+    case 'disposalNode':
+      return { ...base, type, data: { name: 'Disposal' } };
   }
 };
 
@@ -133,6 +139,50 @@ const mapMachine = (
       : node,
   );
 
+// sink nodes whose name is driven by the connected machine output (not editable)
+const SINK_TYPES = new Set<ProductionNodeType>(['outputNode', 'disposalNode']);
+
+// display label for a connected sink, e.g. "Iron Plate x4"
+const outputLabel = (output: MachineOutput): string =>
+  `${output.name || 'Item'} x${output.quantity}`;
+
+// rename every sink to its connected machine output's label; sinks with no
+// incoming machine-output edge keep their current name
+const relabelSinks = (
+  nodes: ProductionNode[],
+  edges: Edge[],
+): ProductionNode[] => {
+  // `${machineId}:${outputId}` -> label
+  const labels = new Map<string, string>();
+
+  for (const node of nodes) {
+    if (node.type === 'machineNode')
+      for (const output of node.data.outputs)
+        labels.set(`${node.id}:${output.id}`, outputLabel(output));
+  }
+
+  // target sink id -> label (from edges leaving a machine output handle)
+  const sinkLabels = new Map<string, string>();
+
+  for (const edge of edges) {
+    if (!edge.sourceHandle) continue;
+
+    const label = labels.get(`${edge.source}:${edge.sourceHandle}`);
+
+    if (label === undefined) continue;
+
+    sinkLabels.set(edge.target, label);
+  }
+
+  return nodes.map(node => {
+    const label = sinkLabels.get(node.id);
+
+    return label !== undefined && SINK_TYPES.has(node.type)
+      ? ({ ...node, data: { ...node.data, name: label } } as ProductionNode)
+      : node;
+  });
+};
+
 export const useProductionStore = create<ProductionState>()(
   persist(
     temporal(
@@ -144,10 +194,17 @@ export const useProductionStore = create<ProductionState>()(
           set({ nodes: applyNodeChanges(changes, get().nodes) }),
         onEdgesChange: changes =>
           set({ edges: applyEdgeChanges(changes, get().edges) }),
-        onConnect: connection =>
-          set({
-            edges: addEdge({ ...connection, animated: true }, get().edges),
-          }),
+        onConnect: connection => {
+          const edges = addEdge(
+            {
+              ...connection,
+              animated: true,
+              markerEnd: { type: 'arrowclosed' },
+            },
+            get().edges,
+          );
+          set({ edges, nodes: relabelSinks(get().nodes, edges) });
+        },
 
         addNode: (type, position) =>
           set({ nodes: [...get().nodes, createNode(type, position)] }),
@@ -184,33 +241,33 @@ export const useProductionStore = create<ProductionState>()(
               ...data,
               outputs: [
                 ...data.outputs,
-                {
-                  id: crypto.randomUUID(),
-                  name: '',
-                  quantity: 1,
-                  disposal: false,
-                },
+                { id: crypto.randomUUID(), name: '', quantity: 1 },
               ],
             })),
           }),
 
-        updateMachineOutput: (nodeId, outputId, patch) =>
-          set({
-            nodes: mapMachine(get().nodes, nodeId, data => ({
-              ...data,
-              outputs: data.outputs.map(output =>
-                output.id === outputId ? { ...output, ...patch } : output,
-              ),
-            })),
-          }),
+        updateMachineOutput: (nodeId, outputId, patch) => {
+          const nodes = mapMachine(get().nodes, nodeId, data => ({
+            ...data,
+            outputs: data.outputs.map(output =>
+              output.id === outputId ? { ...output, ...patch } : output,
+            ),
+          }));
+          // propagate name/quantity change to any connected sink
+          set({ nodes: relabelSinks(nodes, get().edges) });
+        },
 
-        removeMachineOutput: (nodeId, outputId) =>
-          set({
-            nodes: mapMachine(get().nodes, nodeId, data => ({
-              ...data,
-              outputs: data.outputs.filter(output => output.id !== outputId),
-            })),
-          }),
+        removeMachineOutput: (nodeId, outputId) => {
+          const nodes = mapMachine(get().nodes, nodeId, data => ({
+            ...data,
+            outputs: data.outputs.filter(output => output.id !== outputId),
+          }));
+          // drop edges leaving the removed output handle (now dangling)
+          const edges = get().edges.filter(
+            edge => !(edge.source === nodeId && edge.sourceHandle === outputId),
+          );
+          set({ nodes: relabelSinks(nodes, edges), edges });
+        },
       }),
       {
         // only track graph data in history (not handler/action refs)

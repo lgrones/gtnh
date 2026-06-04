@@ -7,5 +7,5 @@ import { ProductionNode } from './productionNode';
 type InputNodeType = Extract<IProductionNode, { type: 'inputNode' }>;
 
 export const InputNode = (props: NodeProps<InputNodeType>) => (
-  <ProductionNode {...props} type="source" />
+  <ProductionNode {...props} type="source" color="teal" />
 );

@@ -1,113 +1,105 @@
-import { type NodeProps } from '@xyflow/react';
+import {
+  ActionIcon,
+  Group,
+  NumberInput,
+  Stack,
+  TextInput,
+} from '@mantine/core';
+import { IconPlus, IconX } from '@tabler/icons-react';
+import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { useShallow } from 'zustand/shallow';
 
-import { type ProductionNode as IProductionNode } from '@/contexts/productionStore';
+import {
+  useProductionStore,
+  type ProductionNode as IProductionNode,
+} from '@/contexts/productionStore';
 
 import { ProductionNode } from './productionNode';
 
+import classes from './productionNode.module.css';
+
 type MachineNodeType = Extract<IProductionNode, { type: 'machineNode' }>;
 
-export const MachineNode = (props: NodeProps<MachineNodeType>) => (
-  <ProductionNode {...props} type="both" />
-);
+export const MachineNode = ({
+  id,
+  data,
+  ...props
+}: NodeProps<MachineNodeType>) => {
+  const { addMachineOutput, updateMachineOutput, removeMachineOutput } =
+    useProductionStore(
+      useShallow(state => ({
+        addMachineOutput: state.addMachineOutput,
+        updateMachineOutput: state.updateMachineOutput,
+        removeMachineOutput: state.removeMachineOutput,
+      })),
+    );
 
-// import {
-//   ActionIcon,
-//   Button,
-//   Group,
-//   NumberInput,
-//   Stack,
-//   TextInput,
-//   Tooltip,
-// } from '@mantine/core';
-// import { IconPlus, IconTrash, IconX } from '@tabler/icons-react';
-// import { Position, type NodeProps } from '@xyflow/react';
-// import { useShallow } from 'zustand/react/shallow';
+  return (
+    <ProductionNode
+      id={id}
+      data={data}
+      {...props}
+      type="target"
+      color="indigo"
+      rightSection={
+        <ActionIcon
+          ml="auto"
+          variant="subtle"
+          color="gray"
+          onClick={() => addMachineOutput(id)}
+        >
+          <IconPlus size={16} />
+        </ActionIcon>
+      }
+    >
+      <Stack gap="xs" mt="xs">
+        {data.outputs.map(output => (
+          <Group key={output.id} gap="xs" className={classes.row}>
+            <NumberInput
+              size="xs"
+              variant="unstyled"
+              w={6 + output.quantity.toString().length * 8}
+              pl={6}
+              radius={0}
+              min={1}
+              hideControls
+              value={output.quantity}
+              onChange={value =>
+                updateMachineOutput(id, output.id, {
+                  quantity: typeof value === 'number' ? value : 0,
+                })
+              }
+            />
 
-// import { useProductionStore, type ProductionNode } from '@/contexts/productionStore';
+            <TextInput
+              size="xs"
+              variant="unstyled"
+              placeholder="Item"
+              value={output.name}
+              onChange={event =>
+                updateMachineOutput(id, output.id, {
+                  name: event.currentTarget.value,
+                })
+              }
+            />
 
-// type MachineNodeType = Extract<ProductionNode, { type: 'machineNode' }>;
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              onClick={() => removeMachineOutput(id, output.id)}
+            >
+              <IconX size={16} />
+            </ActionIcon>
 
-// // processing step — takes inputs (left), produces named outputs (right),
-// // each output has a quantity and can be flagged as disposal (discarded)
-// export const MachineNode = ({ id, data }: NodeProps<MachineNodeType>) => {
-//   const { addMachineOutput, updateMachineOutput, removeMachineOutput } =
-//     useProductionStore(
-//       useShallow(state => ({
-//         addMachineOutput: state.addMachineOutput,
-//         updateMachineOutput: state.updateMachineOutput,
-//         removeMachineOutput: state.removeMachineOutput,
-//       })),
-//     );
-
-//   return (
-//     <>
-//       <EdgeHandle type="target" position={Position.Left} />
-
-//       <NodeShell id={id} name={data.name} accent="orange">
-//         <Stack gap="xs" mt="xs">
-//           {data.outputs.map(output => (
-//             <Group key={output.id} gap="xs" wrap="nowrap" className="nodrag">
-//               <TextInput
-//                 size="xs"
-//                 placeholder="Item"
-//                 value={output.name}
-//                 onChange={event =>
-//                   updateMachineOutput(id, output.id, {
-//                     name: event.currentTarget.value,
-//                   })
-//                 }
-//               />
-
-//               <NumberInput
-//                 size="xs"
-//                 w={70}
-//                 min={0}
-//                 value={output.quantity}
-//                 onChange={value =>
-//                   updateMachineOutput(id, output.id, {
-//                     quantity: typeof value === 'number' ? value : 0,
-//                   })
-//                 }
-//               />
-
-//               <Tooltip
-//                 label={output.disposal ? 'Disposal output' : 'Mark as disposal'}
-//               >
-//                 <ActionIcon
-//                   variant={output.disposal ? 'filled' : 'subtle'}
-//                   color="red"
-//                   onClick={() =>
-//                     updateMachineOutput(id, output.id, {
-//                       disposal: !output.disposal,
-//                     })
-//                   }
-//                 >
-//                   <IconTrash size={16} />
-//                 </ActionIcon>
-//               </Tooltip>
-
-//               <ActionIcon
-//                 variant="subtle"
-//                 color="gray"
-//                 onClick={() => removeMachineOutput(id, output.id)}
-//               >
-//                 <IconX size={16} />
-//               </ActionIcon>
-//             </Group>
-//           ))}
-
-//           <Button
-//             size="xs"
-//             variant="light"
-//             leftSection={<IconPlus size={14} />}
-//             onClick={() => addMachineOutput(id)}
-//           >
-//             Add output
-//           </Button>
-//         </Stack>
-//       </NodeShell>
-
-//       <EdgeHandle type="source" position={Position.Right} />
-//     </>
-//   );
-// };
+            <Handle
+              type="source"
+              id={output.id}
+              position={Position.Right}
+              className={classes.output}
+            />
+          </Group>
+        ))}
+      </Stack>
+    </ProductionNode>
+  );
+};

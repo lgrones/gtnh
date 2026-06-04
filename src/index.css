@@ -9,3 +9,11 @@
 .react-flow .react-flow__connectionline {
   z-index: 0;
 }
+
+.react-flow__node.draggable {
+  cursor: default;
+
+  &.dragging .drag-handle_production {
+    cursor: grabbing;
+  }
+}

@@ -10,18 +10,7 @@
     height: 100%;
     width: 3px;
     border-radius: var(--mantine-radius-md) 0 0 var(--mantine-radius-md);
-  }
-
-  &[data-source]::before {
-    background-color: var(--mantine-color-teal-filled);
-  }
-
-  &[data-target]::before {
-    background-color: var(--mantine-color-grape-filled);
-  }
-
-  &[data-both]::before {
-    background-color: var(--mantine-color-indigo-filled);
+    background-color: var(--node-color);
   }
 }
 
@@ -30,6 +19,12 @@
   position: relative;
   z-index: 1;
   gap: 0;
+
+  /* stylelint-disable-next-line selector-class-pattern */
+  :global(.drag-handle_production) {
+    cursor: grab;
+    color: var(--mantine-color-dimmed);
+  }
 }
 
 .input {
@@ -52,4 +47,17 @@
   top: 50%;
   pointer-events: none;
   opacity: 0;
+}
+
+.row {
+  position: relative;
+}
+
+.output {
+  right: calc(var(--mantine-spacing-xs) * -1);
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--node-color);
+  border: none;
 }
