@@ -1,9 +1,11 @@
-import { AppShell } from '@mantine/core';
+import { AppShell, Box } from '@mantine/core';
 import { createFileRoute } from '@tanstack/react-router';
 
 import { ProductionFlow } from '@/components/production/productionFlow';
 import { ProductionFlows } from '@/components/production/productionFlows';
 import { ProductionStats } from '@/components/production/productionStats';
+
+import classes from './index.module.css';
 
 const Index = () => {
   return (
@@ -13,13 +15,11 @@ const Index = () => {
       withBorder={false}
     >
       <AppShell.Navbar>
-        <AppShell.Section grow pl="md" py="md">
+        <Box className={classes.nav}>
           <ProductionFlows />
-        </AppShell.Section>
 
-        <AppShell.Section grow pl="md" pb="md">
           <ProductionStats />
-        </AppShell.Section>
+        </Box>
       </AppShell.Navbar>
 
       <AppShell.Main h="100dvh">

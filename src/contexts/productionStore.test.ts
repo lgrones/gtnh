@@ -430,16 +430,3 @@ describe('undo / redo', () => {
     expect(state().nodes).toHaveLength(0);
   });
 });
-
-describe('persistence', () => {
-  it('writes the graph to localStorage', () => {
-    addNode('outputNode');
-    const raw = localStorage.getItem('gtnh-production-line');
-    expect(raw).not.toBeNull();
-    const persisted = JSON.parse(raw!) as {
-      state: { nodes: ProductionNode[] };
-    };
-    expect(persisted.state.nodes).toHaveLength(1);
-    expect(persisted.state.nodes[0]!.type).toBe('outputNode');
-  });
-});

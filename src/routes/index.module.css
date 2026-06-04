@@ -1,0 +1,8 @@
+.nav {
+  display: grid;
+  grid-template-rows: 1fr 2fr;
+  gap: var(--mantine-spacing-md);
+  padding-block: var(--mantine-spacing-md);
+  padding-left: var(--mantine-spacing-md);
+  height: 100dvh;
+}

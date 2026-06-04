@@ -1,6 +1,5 @@
 import { temporal } from 'zundo';
 import { useStore } from 'zustand';
-import { persist } from 'zustand/middleware';
 import { create } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -25,33 +24,29 @@ export type {
 } from './types';
 export { DRAG_HANDLE_CLASS } from './types';
 
+// the live editing surface for the active graph. persistence lives in the
+// library store (useProductionLibrary) — this store is hydrated from / synced
+// back to the active saved graph, and only tracks undo/redo history here
 export const useProductionStore = create<ProductionState>()(
-  persist(
-    temporal(
-      (set, get) => ({
-        ...createGraphSlice(set, get),
-        ...createNodeDataSlice(set, get),
-        ...createClipboardSlice(set, get),
+  temporal(
+    (set, get) => ({
+      ...createGraphSlice(set, get),
+      ...createNodeDataSlice(set, get),
+      ...createClipboardSlice(set, get),
 
-        reset: (nodes = [], edges = []) => {
-          set({ nodes, edges });
-          // drop history so undo can't reach the previous production line
-          useProductionStore.temporal.getState().clear();
-        },
-      }),
-      {
-        // only track graph data in history (not handler/action refs)
-        partialize: state => ({ nodes: state.nodes, edges: state.edges }),
-        // group rapid sets (e.g. a node drag) into a single undo step
-        // instead of one entry per pixel of movement
-        handleSet: handleSet => debounce(handleSet, 400),
-        limit: 100, // cap history depth
+      reset: (nodes = [], edges = []) => {
+        set({ nodes, edges });
+        // drop history so undo can't reach the previous production line
+        useProductionStore.temporal.getState().clear();
       },
-    ),
+    }),
     {
-      name: 'gtnh-production-line', // localStorage key
-      // persist graph only, not history
+      // only track graph data in history (not handler/action refs)
       partialize: state => ({ nodes: state.nodes, edges: state.edges }),
+      // group rapid sets (e.g. a node drag) into a single undo step
+      // instead of one entry per pixel of movement
+      handleSet: handleSet => debounce(handleSet, 400),
+      limit: 100, // cap history depth
     },
   ),
 );
