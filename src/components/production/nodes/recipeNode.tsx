@@ -118,11 +118,12 @@ export const RecipeNode = ({
                 flex={1}
                 min={1}
                 hideControls
+                allowNegative={false}
                 allowDecimal={false}
                 value={data.amperage}
                 onChange={value =>
                   updateRecipe(id, {
-                    amperage: typeof value === 'number' ? value : 0,
+                    amperage: typeof value === 'number' ? value : data.amperage,
                   })
                 }
                 rightSection={
@@ -141,11 +142,12 @@ export const RecipeNode = ({
                 min={1}
                 flex={1}
                 hideControls
+                allowNegative={false}
                 allowDecimal={false}
                 value={data.steam}
                 onChange={value =>
                   updateRecipe(id, {
-                    steam: typeof value === 'number' ? value : 0,
+                    steam: typeof value === 'number' ? value : data.steam,
                   })
                 }
                 rightSection={
@@ -191,12 +193,14 @@ export const RecipeNode = ({
                   w={60}
                   radius="md"
                   min={1}
+                  allowNegative={false}
                   allowDecimal={false}
                   hideControls
                   value={input.quantity}
                   onChange={value =>
                     updateRecipeInput(id, input.id, {
-                      quantity: typeof value === 'number' ? value : 0,
+                      quantity:
+                        typeof value === 'number' ? value : input.quantity,
                     })
                   }
                 />
@@ -261,12 +265,14 @@ export const RecipeNode = ({
                   w={60}
                   radius="md"
                   min={1}
+                  allowNegative={false}
                   allowDecimal={false}
                   hideControls
                   value={output.quantity}
                   onChange={value =>
                     updateRecipeOutput(id, output.id, {
-                      quantity: typeof value === 'number' ? value : 0,
+                      quantity:
+                        typeof value === 'number' ? value : output.quantity,
                     })
                   }
                 />

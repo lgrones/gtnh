@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   useProductionStore,
+  validateGraph,
   type RecipeNodeData,
   type SinkNodeData,
   type ProductionNode,
@@ -375,6 +376,292 @@ describe('mirror sync — recipe -> recipe', () => {
     });
     expect(recipeData(b).inputs[0]).toMatchObject({ name: 'Ore', quantity: 1 });
     expect(state().edges).toHaveLength(1);
+  });
+});
+
+describe('isValidConnection', () => {
+  const recipePair = (outName: string, inName: string) => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: outName });
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: inName });
+    return { a, b, outId, inId };
+  };
+
+  it('allows a recipe->recipe edge when names match (case/space-insensitive)', () => {
+    const { a, b, outId, inId } = recipePair('Iron Ore', '  iron ore ');
+    expect(
+      state().isValidConnection({
+        source: a,
+        target: b,
+        sourceHandle: outId,
+        targetHandle: inId,
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects a recipe->recipe edge when names differ', () => {
+    const { a, b, outId, inId } = recipePair('Iron Ore', 'Copper Ore');
+    expect(
+      state().isValidConnection({
+        source: a,
+        target: b,
+        sourceHandle: outId,
+        targetHandle: inId,
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects a recipe->recipe edge when both names are empty', () => {
+    const { a, b, outId, inId } = recipePair('', '');
+    expect(
+      state().isValidConnection({
+        source: a,
+        target: b,
+        sourceHandle: outId,
+        targetHandle: inId,
+      }),
+    ).toBe(false);
+  });
+
+  it('always allows leaf connections (recipe->sink, input->recipe)', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore' });
+    const sink = addNode('outputNode');
+    const input = addNode('inputNode');
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore' });
+
+    expect(
+      state().isValidConnection({
+        source: a,
+        target: sink,
+        sourceHandle: outId,
+        targetHandle: null,
+      }),
+    ).toBe(true);
+    expect(
+      state().isValidConnection({
+        source: input,
+        target: b,
+        sourceHandle: null,
+        targetHandle: inId,
+      }),
+    ).toBe(true);
+  });
+
+  it('onConnect adds no edge for a name-mismatched recipe->recipe drop', () => {
+    const { a, b, outId, inId } = recipePair('Iron Ore', 'Copper Ore');
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+    expect(state().edges).toHaveLength(0);
+  });
+});
+
+describe('sink remainder', () => {
+  const sinkData = (id: string) =>
+    state().nodes.find(n => n.id === id)!.data as SinkNodeData;
+
+  it('shows the leftover after downstream recipes take their share', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 10 });
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 4 });
+    const sink = addNode('outputNode');
+
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+    state().onConnect({
+      source: a,
+      target: sink,
+      sourceHandle: outId,
+      targetHandle: null,
+    });
+
+    expect(sinkData(sink).quantity).toBe(6);
+  });
+
+  it('goes negative when downstream demand exceeds supply', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 10 });
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 4 });
+    const sink = addNode('outputNode');
+
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+    state().onConnect({
+      source: a,
+      target: sink,
+      sourceHandle: outId,
+      targetHandle: null,
+    });
+
+    state().updateRecipeInput(b, inId, { quantity: 12 });
+    expect(sinkData(sink).quantity).toBe(-2);
+  });
+});
+
+describe('validateGraph', () => {
+  it('reports a deficit against the receiving recipe', () => {
+    const a = addNode('recipeNode');
+    state().renameNode(a, 'Producer');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 5 });
+    const b = addNode('recipeNode');
+    state().renameNode(b, 'Receiver');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 8 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+
+    const issues = validateGraph(state().nodes, state().edges);
+    expect(issues).toContainEqual(
+      expect.objectContaining({
+        kind: 'deficit',
+        recipe: 'Receiver',
+        item: 'Ore',
+        demand: 8,
+        supply: 5,
+      }),
+    );
+  });
+
+  it('is clean when supply meets demand and every input is fed', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 8 });
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 8 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+
+    expect(validateGraph(state().nodes, state().edges)).toEqual([]);
+  });
+
+  it('flags a fully unconnected output as surplus', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 5 });
+
+    expect(validateGraph(state().nodes, state().edges)).toContainEqual(
+      expect.objectContaining({
+        kind: 'surplus',
+        item: 'Ore',
+        supply: 5,
+        demand: 0,
+      }),
+    );
+  });
+
+  it('flags an output only partly consumed with no sink as surplus', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 10 });
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 4 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+
+    expect(validateGraph(state().nodes, state().edges)).toContainEqual(
+      expect.objectContaining({
+        kind: 'surplus',
+        item: 'Ore',
+        supply: 10,
+        demand: 4,
+      }),
+    );
+  });
+
+  it('does not flag surplus when a sink absorbs the leftover', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 10 });
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 4 });
+    const sink = addNode('outputNode');
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+    state().onConnect({
+      source: a,
+      target: sink,
+      sourceHandle: outId,
+      targetHandle: null,
+    });
+
+    expect(
+      validateGraph(state().nodes, state().edges).filter(
+        i => i.kind === 'surplus',
+      ),
+    ).toEqual([]);
+  });
+
+  it('reports an unfed recipe input with no incoming edge', () => {
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 4 });
+
+    expect(validateGraph(state().nodes, state().edges)).toContainEqual(
+      expect.objectContaining({ kind: 'unfed', item: 'Ore' }),
+    );
+  });
+
+  it('does not flag an input fed by an input node', () => {
+    const input = addNode('inputNode');
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 4 });
+    state().onConnect({
+      source: input,
+      target: b,
+      sourceHandle: null,
+      targetHandle: inId,
+    });
+
+    expect(
+      validateGraph(state().nodes, state().edges).filter(
+        i => i.kind === 'unfed',
+      ),
+    ).toEqual([]);
   });
 });
 

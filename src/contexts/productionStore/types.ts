@@ -1,5 +1,6 @@
 import {
   type Edge,
+  type IsValidConnection,
   type Node,
   type OnConnect,
   type OnEdgesChange,
@@ -90,6 +91,7 @@ export interface ProductionState {
   onNodesChange: OnNodesChange<ProductionNode>;
   onEdgesChange: OnEdgesChange;
   onConnect: OnConnect;
+  isValidConnection: IsValidConnection;
 
   // node ops
   addNode: (

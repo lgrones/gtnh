@@ -1,6 +1,11 @@
 import { addEdge, applyEdgeChanges, applyNodeChanges } from '@xyflow/react';
 
-import { SINK_TYPES, createNode, syncMirrors } from '../helpers';
+import {
+  SINK_TYPES,
+  createNode,
+  isValidConnection,
+  syncMirrors,
+} from '../helpers';
 import { type ProductionState, type SliceCreator } from '../types';
 
 type GraphSlice = Pick<
@@ -10,6 +15,7 @@ type GraphSlice = Pick<
   | 'onNodesChange'
   | 'onEdgesChange'
   | 'onConnect'
+  | 'isValidConnection'
   | 'addNode'
   | 'removeNode'
   | 'setNodes'
@@ -35,8 +41,12 @@ export const createGraphSlice: SliceCreator<GraphSlice> = (set, get) => ({
       removed ? { edges, nodes: syncMirrors(get().nodes, edges) } : { edges },
     );
   },
+  isValidConnection: connection => isValidConnection(get().nodes, connection),
+
   onConnect: connection => {
     const nodes = get().nodes;
+    // reject recipe<->recipe edges whose item names disagree (leaves mirror)
+    if (!isValidConnection(nodes, connection)) return;
     // sinks mirror a single recipe output — replace any existing incoming edge
     const targetIsSink = nodes.some(
       node => node.id === connection.target && SINK_TYPES.has(node.type),

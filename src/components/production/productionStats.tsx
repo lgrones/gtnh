@@ -1,24 +1,59 @@
 import {
   Box,
+  Button,
+  Divider,
   Group,
   Paper,
   Stack,
   Text,
   type MantineColor,
 } from '@mantine/core';
+import { IconCircleCheck, IconChecklist } from '@tabler/icons-react';
+import { useState } from 'react';
 
 import {
   useProductionStore,
+  validateGraph,
+  type GraphIssue,
   type ProductionNode,
   type ProductionNodeType,
 } from '@/contexts/productionStore';
 
 export const ProductionStats = () => {
   const nodes = useProductionStore(state => state.nodes);
+  const edges = useProductionStore(state => state.edges);
+
+  // snapshot from the last Validate click — not recomputed while editing
+  const [issues, setIssues] = useState<GraphIssue[] | null>(null);
 
   return (
     <Paper h="100%" p="md" component={Stack} style={{ overflow: 'auto' }}>
+      <Button
+        variant="light"
+        color="indigo"
+        leftSection={<IconChecklist size={16} />}
+        onClick={() => setIssues(validateGraph(nodes, edges))}
+      >
+        Validate
+      </Button>
+
+      {issues !== null && <Validation issues={issues} />}
+
+      <Divider />
+
+      <Text fw={600}>Statistics</Text>
+
       <Items label="Inputs" nodes={nodes} type="inputNode" color="teal" />
+
+      <Items
+        label="Disposals"
+        nodes={nodes}
+        type="disposalNode"
+        color="orange"
+      />
+
+      <Items label="Outputs" nodes={nodes} type="outputNode" color="grape" />
+
       <Items
         label="Machines"
         nodes={nodes}
@@ -26,14 +61,70 @@ export const ProductionStats = () => {
         color="indigo"
         groupBy={node => (node.type === 'recipeNode' ? node.data.machine : '')}
       />
+
       <Items
-        label="Disposals"
+        label="Voltage"
         nodes={nodes}
-        type="disposalNode"
-        color="orange"
+        type="recipeNode"
+        color="yellow"
+        groupBy={node => (node.type === 'recipeNode' ? node.data.voltage : '')}
       />
-      <Items label="Outputs" nodes={nodes} type="outputNode" color="grape" />
+
+      <ItemGroup label="Max Amperage">
+        <Item color="red">
+          <Text>
+            {nodes
+              .filter(x => x.type === 'recipeNode')
+              .reduce((acc, curr) => Math.max(acc, curr.data.amperage), 0)}{' '}
+            A
+          </Text>
+        </Item>
+      </ItemGroup>
+
+      <ItemGroup label="Steam">
+        <Item color="cyan">
+          <Text>
+            {nodes
+              .filter(x => x.type === 'recipeNode')
+              .reduce((acc, curr) => acc + curr.data.steam, 0)}{' '}
+            L/t
+          </Text>
+        </Item>
+      </ItemGroup>
     </Paper>
+  );
+};
+
+const issueLabel = (issue: GraphIssue) => {
+  switch (issue.kind) {
+    case 'deficit':
+      return `needs ${issue.demand}, supplies ${issue.supply}`;
+    case 'surplus':
+      return `${(issue.supply ?? 0) - (issue.demand ?? 0)} unused, no sink`;
+    case 'unfed':
+      return 'no source';
+  }
+};
+
+const Validation = ({ issues }: { issues: GraphIssue[] }) => {
+  if (issues.length === 0)
+    return (
+      <Group gap="xs" c="teal">
+        <IconCircleCheck size={16} />
+        <Text size="sm">No issues</Text>
+      </Group>
+    );
+
+  return (
+    <ItemGroup label="Issues">
+      {issues.map((issue, i) => (
+        <Item color="red" key={i}>
+          <Text size="sm">
+            {issue.recipe} · {issue.item}: {issueLabel(issue)}
+          </Text>
+        </Item>
+      ))}
+    </ItemGroup>
   );
 };
 
@@ -58,15 +149,9 @@ const Items = ({
   );
 
   return (
-    <Box>
-      <Text c="dimmed" size="xs" tt="uppercase" fw={600}>
-        {label}
-      </Text>
-
+    <ItemGroup label={label}>
       {Object.entries(items).map(([name, nodes]) => (
-        <Group key={name} gap="xs">
-          <Box w={12} h={12} bg={color} style={{ borderRadius: '50%' }} />
-
+        <Item color={color} key={name}>
           <Text>
             {nodes?.reduce(
               (acc, curr) =>
@@ -76,8 +161,39 @@ const Items = ({
             )}{' '}
             {name}
           </Text>
-        </Group>
+        </Item>
       ))}
+    </ItemGroup>
+  );
+};
+
+interface ItemGroupProps {
+  label: string;
+  children: React.ReactNode;
+}
+
+const ItemGroup = ({ label, children }: ItemGroupProps) => {
+  return (
+    <Box>
+      <Text c="dimmed" size="xs" tt="uppercase" fw={600}>
+        {label}
+      </Text>
+
+      {children}
     </Box>
+  );
+};
+
+interface ItemProps {
+  color: MantineColor;
+  children: React.ReactNode;
+}
+
+const Item = ({ color, children }: ItemProps) => {
+  return (
+    <Group gap="xs">
+      <Box w={12} h={12} bg={color} style={{ borderRadius: '50%' }} />
+      {children}
+    </Group>
   );
 };

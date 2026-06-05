@@ -25,6 +25,7 @@ export type {
   VoltageTier,
 } from './types';
 export { DRAG_HANDLE_CLASS, VOLTAGE_TIERS } from './types';
+export { validateGraph, type GraphIssue } from './helpers';
 
 // the live editing surface for the active graph. persistence lives in the
 // library store (useProductionLibrary) — this store is hydrated from / synced
@@ -65,6 +66,7 @@ export const useProductionFlow = () =>
       onNodesChange: state.onNodesChange,
       onEdgesChange: state.onEdgesChange,
       onConnect: state.onConnect,
+      isValidConnection: state.isValidConnection,
     })),
   );
 
