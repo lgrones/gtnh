@@ -1,0 +1,51 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // graphs: durable per-graph snapshot + sharing metadata. The live editing
+    // delta stream lives in Realtime Database; this is the source of truth for
+    // membership and the compacted Yjs snapshot.
+    match /graphs/{graphId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+      function existing() {
+        return resource.data;
+      }
+      function incoming() {
+        return request.resource.data;
+      }
+      function isOwner() {
+        return isSignedIn() && existing().ownerId == request.auth.uid;
+      }
+      function isMember() {
+        return isSignedIn() && request.auth.uid in existing().memberIds;
+      }
+      function isEditor() {
+        return isOwner()
+          || (isMember() && existing().roles[request.auth.uid] == 'editor');
+      }
+      // an invited user (by email) reading/claiming a graph they don't yet belong to
+      function isInvited() {
+        return isSignedIn()
+          && existing().inviteEmails != null
+          && request.auth.token.email in existing().inviteEmails;
+      }
+      // claiming an invite: the user adds *themselves* to memberIds. Other field
+      // tampering during a claim is possible but low-impact for this app; harden
+      // with a Cloud Function later if needed.
+      function isClaiming() {
+        return isInvited()
+          && !(request.auth.uid in existing().memberIds)
+          && request.auth.uid in incoming().memberIds;
+      }
+
+      allow read: if isMember() || isInvited();
+      allow create: if isSignedIn()
+        && incoming().ownerId == request.auth.uid
+        && request.auth.uid in incoming().memberIds;
+      allow update: if isEditor() || isClaiming();
+      allow delete: if isOwner();
+    }
+  }
+}

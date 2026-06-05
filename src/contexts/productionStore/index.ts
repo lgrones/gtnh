@@ -1,9 +1,7 @@
-import { temporal } from 'zundo';
-import { useStore } from 'zustand';
 import { create } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 
-import { debounce, normalizeNodes, sameHistoryState } from './helpers';
+import { normalizeNodes } from './helpers';
 import { createClipboardSlice } from './slices/clipboard';
 import { createGraphSlice } from './slices/graph';
 import { createNodeDataSlice } from './slices/nodeData';
@@ -36,43 +34,18 @@ export {
   type TierDemand,
 } from './helpers';
 
-// the live editing surface for the active graph. persistence lives in the
-// library store (useProductionLibrary) — this store is hydrated from / synced
-// back to the active saved graph, and only tracks undo/redo history here
-export const useProductionStore = create<ProductionState>()(
-  temporal(
-    (set, get) => ({
-      ...createGraphSlice(set, get),
-      ...createNodeDataSlice(set, get),
-      ...createClipboardSlice(set, get),
+// the live editing surface for the active graph. the graph is a Yjs doc owned by
+// the collab session (@/contexts/collab/session), which mirrors edits into this
+// store both ways and drives undo/redo via Y.UndoManager. this store just holds
+// what XYFlow renders + the mutation actions.
+export const useProductionStore = create<ProductionState>()((set, get) => ({
+  ...createGraphSlice(set, get),
+  ...createNodeDataSlice(set, get),
+  ...createClipboardSlice(set, get),
 
-      reset: (nodes = [], edges = []) => {
-        // pause tracking so loading a line isn't itself recorded — otherwise the
-        // debounced push fires *after* clear() and leaves a phantom undo entry
-        const temporal = useProductionStore.temporal.getState();
-        temporal.pause();
-        set({ nodes: normalizeNodes(nodes), edges });
-        temporal.resume();
-        // drop history so undo can't reach the previous production line
-        temporal.clear();
-      },
-    }),
-    {
-      // only track graph data in history (not handler/action refs)
-      partialize: state => ({ nodes: state.nodes, edges: state.edges }),
-      // ignore React Flow's volatile churn (measured size, selection, drag) so
-      // it doesn't flood history or wipe the redo stack on a re-measure
-      equality: sameHistoryState,
-      // group rapid sets (e.g. a node drag) into a single undo step
-      // instead of one entry per pixel of movement
-      handleSet: handleSet => debounce(handleSet, 400),
-      limit: 100, // cap history depth
-    },
-  ),
-);
-
-// subscribe to undo/redo state: { undo, redo, clear, pastStates, futureStates, ... }
-export const useProductionHistory = () => useStore(useProductionStore.temporal);
+  reset: (nodes = [], edges = []) =>
+    set({ nodes: normalizeNodes(nodes), edges }),
+}));
 
 // all props React Flow needs — spread onto <ReactFlow {...useProductionFlow()} />
 export const useProductionFlow = () =>
@@ -88,9 +61,11 @@ export const useProductionFlow = () =>
     })),
   );
 
-// all callbacks the controls UI needs: node/graph mutations + undo/redo
-export const useProductionControls = () => {
-  const actions = useProductionStore(
+// the node/graph mutation actions the controls UI needs. undo/redo live in the
+// collab session (@/contexts/collab/session, useCollab) since history is owned
+// by the graph's Y.UndoManager, not this store.
+export const useProductionControls = () =>
+  useProductionStore(
     useShallow(state => ({
       addNode: state.addNode,
       removeNode: state.removeNode,
@@ -109,16 +84,3 @@ export const useProductionControls = () => {
       deselectAll: state.deselectAll,
     })),
   );
-
-  const { undo, redo, clear, pastStates, futureStates } =
-    useProductionHistory();
-
-  return {
-    ...actions,
-    undo,
-    redo,
-    clearHistory: clear,
-    canUndo: pastStates.length > 0,
-    canRedo: futureStates.length > 0,
-  };
-};

@@ -15,6 +15,18 @@ test_results
 test_coverage
 .vitest-attachments
 
+# env
+.env
+.env.*
+!.env.example
+
+# firebase
+.firebase
+firebase-debug.log
+database-debug.log
+firestore-debug.log
+ui-debug.log
+
 # Editor directories and files
 .idea
 .DS_Store

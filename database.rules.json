@@ -1,0 +1,18 @@
+{
+  "rules": {
+    "live": {
+      "$graphId": {
+        "_comment": "Live Yjs delta stream + presence. RTDB rules cannot read Firestore, so per-graph membership is enforced by Firestore (the durable store) plus unguessable random graphIds. Here we require auth and pin each presence entry to its own uid.",
+        ".read": "auth != null",
+        "updates": {
+          ".write": "auth != null"
+        },
+        "presence": {
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid"
+          }
+        }
+      }
+    }
+  }
+}

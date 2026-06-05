@@ -2,7 +2,9 @@ import { Menu, Text } from '@mantine/core';
 import { useHotkeys, useMousePosition, useUncontrolled } from '@mantine/hooks';
 import { useReactFlow } from '@xyflow/react';
 import type { PropsWithChildren } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
+import { useCollab } from '@/contexts/collab/session';
 import {
   layoutNodes,
   useProductionControls,
@@ -32,7 +34,15 @@ export const Controls = ({
   const { screenToFlowPosition, getNodes, getEdges, deleteElements, fitView } =
     useReactFlow();
   const position = screenToFlowPosition(useMousePosition());
-  const { canUndo, canRedo, undo, redo, ...actions } = useProductionControls();
+  const actions = useProductionControls();
+  const { canUndo, canRedo, undo, redo } = useCollab(
+    useShallow(state => ({
+      canUndo: state.canUndo,
+      canRedo: state.canRedo,
+      undo: state.undo,
+      redo: state.redo,
+    })),
+  );
 
   // reactive: enable "Delete selected" / "Copy" only while something is selected
   const hasSelection = useProductionStore(

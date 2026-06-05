@@ -8,6 +8,7 @@ import { ModalsProvider } from '@mantine/modals';
 import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 
+import { AuthGate } from '@/components/auth/authGate';
 import { createRouterConfig } from '@/infrastructure/router';
 
 const router = createRouterConfig();
@@ -28,7 +29,9 @@ const App = () => {
         }}
       >
         <ModalsProvider>
-          <RouterProvider router={router} />
+          <AuthGate>
+            <RouterProvider router={router} />
+          </AuthGate>
         </ModalsProvider>
       </MantineProvider>
     </StrictMode>

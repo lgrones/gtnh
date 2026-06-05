@@ -1,5 +1,6 @@
 import {
   ActionIcon,
+  Badge,
   Group,
   Paper,
   Stack,
@@ -7,14 +8,27 @@ import {
   TextInput,
 } from '@mantine/core';
 import { modals } from '@mantine/modals';
-import { IconPlus, IconTournament, IconX } from '@tabler/icons-react';
-import { useEffect, useRef } from 'react';
+import {
+  IconPlus,
+  IconShare,
+  IconTournament,
+  IconX,
+} from '@tabler/icons-react';
 import { useShallow } from 'zustand/react/shallow';
 
+import { useAuth } from '@/contexts/auth';
 import { useProductionLibrary } from '@/contexts/productionLibrary';
-import { useProductionStore } from '@/contexts/productionStore';
+
+import { ShareModalContent } from './shareModal';
+
+const openShareModal = (graphId: string) =>
+  modals.open({
+    title: 'Share production line',
+    children: <ShareModalContent graphId={graphId} />,
+  });
 
 export const LibPanel = () => {
+  const uid = useAuth(state => state.user?.uid);
   const {
     graphs,
     activeId,
@@ -32,37 +46,6 @@ export const LibPanel = () => {
       removeGraph: state.removeGraph,
     })),
   );
-  const reset = useProductionStore(state => state.reset);
-
-  // which graph the working store currently holds. guards the save subscribe
-  // against the switch window: when activeId flips, the store still has the OLD
-  // graph until the load effect below runs — saving then would write the old
-  // nodes under the new id and clobber it. only persist once they match.
-  const loadedId = useRef<string | null>(null);
-
-  // load the active saved graph into the working store whenever it changes
-  // (depends on activeId only — saveActive must not retrigger this)
-  useEffect(() => {
-    const graph = useProductionLibrary
-      .getState()
-      .graphs.find(g => g.id === activeId);
-
-    reset(graph?.nodes ?? [], graph?.edges ?? []);
-    loadedId.current = activeId;
-  }, [activeId, reset]);
-
-  // sync every working-store edit back into the active saved graph
-  useEffect(
-    () =>
-      useProductionStore.subscribe(state => {
-        const library = useProductionLibrary.getState();
-        // skip emissions while the store doesn't yet reflect the active graph
-        // (load race) — otherwise we'd persist stale/empty state over it
-        if (loadedId.current !== library.activeId) return;
-        library.saveActive(state.nodes, state.edges);
-      }),
-    [],
-  );
 
   return (
     <Paper
@@ -78,54 +61,78 @@ export const LibPanel = () => {
         <ActionIcon
           variant="subtle"
           color="gray"
-          onClick={createGraph}
+          onClick={() => void createGraph()}
           aria-label="New line"
         >
           <IconPlus size={16} />
         </ActionIcon>
       </Group>
 
-      {graphs.map(graph => (
-        <Group key={graph.id} gap="xs">
-          {graph.id === activeId && (
-            <IconTournament
-              size={16}
-              color="var(--mantine-color-indigo-filled)"
+      {graphs.map(graph => {
+        const isOwner = graph.ownerId === uid;
+        return (
+          <Group key={graph.id} gap="xs">
+            {graph.id === activeId && (
+              <IconTournament
+                size={16}
+                color="var(--mantine-color-indigo-filled)"
+              />
+            )}
+
+            <TextInput
+              flex={1}
+              variant="unstyled"
+              value={graph.name}
+              readOnly={graph.role === 'viewer'}
+              onFocus={() => selectGraph(graph.id)}
+              onChange={e => void renameGraph(graph.id, e.currentTarget.value)}
+              styles={{
+                input: { backgroundColor: 'transparent', border: 'none' },
+              }}
             />
-          )}
 
-          <TextInput
-            flex={1}
-            variant="unstyled"
-            value={graph.name}
-            onFocus={() => selectGraph(graph.id)}
-            onChange={e => renameGraph(graph.id, e.currentTarget.value)}
-            styles={{
-              input: { backgroundColor: 'transparent', border: 'none' },
-            }}
-          />
+            {!isOwner && (
+              <Badge size="xs" variant="light" color="gray">
+                {graph.role}
+              </Badge>
+            )}
 
-          <ActionIcon
-            variant="subtle"
-            color="gray"
-            onClick={() =>
-              modals.openConfirmModal({
-                title: 'Delete production line',
-                children: (
-                  <Text size="sm">
-                    You sure you wanna delete this production line?
-                  </Text>
-                ),
-                labels: { confirm: 'Delete', cancel: 'Cancel' },
-                confirmProps: { color: 'red' },
-                onConfirm: () => removeGraph(graph.id),
-              })
-            }
-          >
-            <IconX size={16} />
-          </ActionIcon>
-        </Group>
-      ))}
+            {isOwner && (
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                aria-label="Share line"
+                onClick={() => openShareModal(graph.id)}
+              >
+                <IconShare size={16} />
+              </ActionIcon>
+            )}
+
+            {isOwner && (
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                aria-label="Delete line"
+                onClick={() =>
+                  modals.openConfirmModal({
+                    title: 'Delete production line',
+                    children: (
+                      <Text size="sm">
+                        You sure you wanna delete this production line?
+                      </Text>
+                    ),
+                    labels: { confirm: 'Delete', cancel: 'Cancel' },
+                    confirmProps: { color: 'red' },
+                    onConfirm: () => void removeGraph(graph.id),
+                  })
+                }
+              >
+                <IconX size={16} />
+              </ActionIcon>
+            )}
+          </Group>
+        );
+      })}
     </Paper>
   );
 };

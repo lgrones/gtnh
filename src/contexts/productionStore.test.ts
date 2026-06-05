@@ -16,10 +16,6 @@ import {
 
 const store = useProductionStore;
 const state = () => store.getState();
-const history = () => store.temporal.getState();
-
-// flush the debounced history push (handleSet is debounced by 400ms)
-const flushHistory = () => vi.advanceTimersByTime(400);
 
 // add a node and return its generated id
 const addNode = (type: ProductionNodeType, x = 0, y = 0) => {
@@ -47,11 +43,8 @@ const addInput = (recipe: string) => {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  localStorage.clear();
-  // clean slate without leaking a debounced push into the next test
   store.setState({ nodes: [], edges: [] });
   vi.runAllTimers();
-  history().clear();
 });
 
 afterEach(() => {
@@ -1112,21 +1105,17 @@ describe('delete via change handlers', () => {
 });
 
 describe('reset', () => {
-  it('clears the graph and history when called with no args', () => {
+  it('clears the graph when called with no args', () => {
     addNode('recipeNode');
-    flushHistory();
-    expect(history().pastStates.length).toBeGreaterThan(0);
 
     state().reset();
 
     expect(state().nodes).toHaveLength(0);
     expect(state().edges).toHaveLength(0);
-    expect(history().pastStates).toHaveLength(0);
   });
 
-  it('loads a saved graph and wipes history', () => {
+  it('loads a saved graph', () => {
     addNode('recipeNode');
-    flushHistory();
 
     const nodes: ProductionNode[] = [
       {
@@ -1140,68 +1129,5 @@ describe('reset', () => {
     state().reset(nodes, edges);
 
     expect(state().nodes).toEqual(nodes);
-    expect(history().pastStates).toHaveLength(0);
-  });
-
-  it('does not leave a phantom undo entry after the debounce window', () => {
-    const nodes: ProductionNode[] = [
-      {
-        id: 'n1',
-        type: 'inputNode',
-        position: { x: 1, y: 2 },
-        data: { name: 'Ore', quantity: 1 },
-      },
-    ];
-    state().reset(nodes, []);
-    // the debounced push must not fire a recording for the load itself
-    flushHistory();
-    expect(history().pastStates).toHaveLength(0);
-  });
-});
-
-describe('undo / redo', () => {
-  it('undoes and redoes a node add', () => {
-    addNode('recipeNode');
-    flushHistory();
-    expect(state().nodes).toHaveLength(1);
-
-    history().undo();
-    expect(state().nodes).toHaveLength(0);
-
-    history().redo();
-    expect(state().nodes).toHaveLength(1);
-  });
-
-  it('keeps the redo stack across volatile (selection) changes', () => {
-    const a = addNode('recipeNode');
-    flushHistory();
-    addNode('recipeNode');
-    flushHistory();
-    expect(state().nodes).toHaveLength(2);
-
-    history().undo();
-    expect(state().nodes).toHaveLength(1);
-    expect(history().futureStates).toHaveLength(1);
-
-    // React Flow selecting/measuring a node must not record or wipe redo
-    state().onNodesChange([{ id: a, type: 'select', selected: true }]);
-    flushHistory();
-    expect(history().futureStates).toHaveLength(1);
-
-    history().redo();
-    expect(state().nodes).toHaveLength(2);
-  });
-
-  it('groups a burst of sets into one undo step', () => {
-    // two adds within the debounce window => single history entry,
-    // snapshotting the state from before the burst
-    addNode('recipeNode');
-    addNode('recipeNode');
-    flushHistory();
-    expect(state().nodes).toHaveLength(2);
-    expect(history().pastStates).toHaveLength(1);
-
-    history().undo();
-    expect(state().nodes).toHaveLength(0);
   });
 });

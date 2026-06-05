@@ -1,5 +1,13 @@
-import { Button, Center, Paper, Stack, Text } from '@mantine/core';
-import { IconPlus } from '@tabler/icons-react';
+import {
+  Button,
+  Center,
+  Group,
+  Loader,
+  Paper,
+  Stack,
+  Text,
+} from '@mantine/core';
+import { IconDeviceFloppy, IconPlus } from '@tabler/icons-react';
 import {
   Background,
   Controls as FlowControls,
@@ -7,25 +15,35 @@ import {
   Panel,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
 } from '@xyflow/react';
-import { useCallback, useState, type CSSProperties } from 'react';
+import {
+  useCallback,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent,
+} from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
+import { useCollab } from '@/contexts/collab/session';
 import {
   useActiveGraph,
+  useActiveRole,
   useProductionLibrary,
 } from '@/contexts/productionLibrary';
-import { useProductionFlow } from '@/contexts/productionStore';
+import {
+  useProductionFlow,
+  useProductionStore,
+} from '@/contexts/productionStore';
 
 import { Controls } from './controls';
+import { Cursors } from './cursors';
 import { nodeTypes } from './nodes/nodeTypes';
 
 export const Flow = () => {
-  const flowProps = useProductionFlow();
   const activeGraph = useActiveGraph();
   const createGraph = useProductionLibrary(state => state.createGraph);
-  const [menuOpened, setMenuOpened] = useState(false);
-
-  const closeMenu = useCallback(() => setMenuOpened(false), []);
 
   if (!activeGraph)
     return (
@@ -37,7 +55,7 @@ export const Flow = () => {
             variant="filled"
             color="gray"
             leftSection={<IconPlus size={16} />}
-            onClick={createGraph}
+            onClick={() => void createGraph()}
           >
             New line
           </Button>
@@ -47,40 +65,111 @@ export const Flow = () => {
 
   return (
     <ReactFlowProvider>
-      <Controls opened={menuOpened} onChange={setMenuOpened}>
-        <Paper h="100%">
-          <ReactFlow
-            {...flowProps}
-            nodeTypes={nodeTypes}
-            connectionRadius={60}
-            deleteKeyCode={['Delete', 'Backspace']}
-            onPaneClick={closeMenu}
-            onMoveStart={closeMenu}
-            colorMode="system"
-            snapToGrid
-            fitView
-            style={
-              {
-                borderRadius: 'var(--mantine-radius-default)',
-                '--xy-background-color-default': 'transparent',
-              } as CSSProperties
-            }
-            proOptions={{ hideAttribution: true }}
-          >
-            <MiniMap />
-            <Background />
-            <FlowControls />
-            <Panel position="top-left">{activeGraph.name}</Panel>
-            {!activeGraph.nodes.length && (
-              <Panel position="center-left" style={{ width: '100%' }}>
-                <Text ta="center">
-                  Starting placing Nodes with right-clicking or using shortcuts
-                </Text>
-              </Panel>
-            )}
-          </ReactFlow>
-        </Paper>
-      </Controls>
+      <FlowCanvas name={activeGraph.name} />
     </ReactFlowProvider>
+  );
+};
+
+// the canvas body — lives inside ReactFlowProvider so it can project cursor
+// coordinates and read role/collab state for the active graph
+const FlowCanvas = ({ name }: { name: string }) => {
+  const flowProps = useProductionFlow();
+  const role = useActiveRole();
+  const canEdit = role === 'owner' || role === 'editor';
+  const hasNodes = useProductionStore(state => state.nodes.length > 0);
+
+  const { status, save, setCursor } = useCollab(
+    useShallow(state => ({
+      status: state.status,
+      save: state.save,
+      setCursor: state.setCursor,
+    })),
+  );
+
+  const { screenToFlowPosition } = useReactFlow();
+  const [menuOpened, setMenuOpened] = useState(false);
+  const closeMenu = useCallback(() => setMenuOpened(false), []);
+
+  // throttle cursor broadcasts (~20/s) — presence is cheap but not free
+  const lastMove = useRef(0);
+  const onMouseMove = (event: MouseEvent) => {
+    const now = Date.now();
+    if (now - lastMove.current < 50) return;
+    lastMove.current = now;
+    setCursor(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
+  };
+
+  const canvas = (
+    <Paper h="100%">
+      <ReactFlow
+        {...flowProps}
+        nodeTypes={nodeTypes}
+        connectionRadius={60}
+        deleteKeyCode={canEdit ? ['Delete', 'Backspace'] : []}
+        nodesDraggable={canEdit}
+        nodesConnectable={canEdit}
+        edgesReconnectable={canEdit}
+        onPaneClick={closeMenu}
+        onMoveStart={closeMenu}
+        onMouseMove={onMouseMove}
+        onMouseLeave={() => setCursor(null)}
+        colorMode="system"
+        snapToGrid
+        fitView
+        style={
+          {
+            borderRadius: 'var(--mantine-radius-default)',
+            '--xy-background-color-default': 'transparent',
+          } as CSSProperties
+        }
+        proOptions={{ hideAttribution: true }}
+      >
+        <MiniMap />
+        <Background />
+        <FlowControls />
+        <Cursors />
+
+        <Panel position="top-left">
+          <Group gap="xs">
+            <Text>{name}</Text>
+            {status === 'loading' && <Loader size="xs" />}
+            {role === 'viewer' && (
+              <Text size="xs" c="dimmed">
+                (read only)
+              </Text>
+            )}
+          </Group>
+        </Panel>
+
+        {canEdit && (
+          <Panel position="top-right">
+            <Button
+              size="xs"
+              variant="default"
+              leftSection={<IconDeviceFloppy size={14} />}
+              onClick={() => void save()}
+            >
+              Save
+            </Button>
+          </Panel>
+        )}
+
+        {!hasNodes && canEdit && (
+          <Panel position="center-left" style={{ width: '100%' }}>
+            <Text ta="center">
+              Starting placing Nodes with right-clicking or using shortcuts
+            </Text>
+          </Panel>
+        )}
+      </ReactFlow>
+    </Paper>
+  );
+
+  return canEdit ? (
+    <Controls opened={menuOpened} onChange={setMenuOpened}>
+      {canvas}
+    </Controls>
+  ) : (
+    canvas
   );
 };

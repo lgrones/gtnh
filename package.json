@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "emulators": "firebase emulators:start",
+    "firebase:deploy": "pnpm build && firebase deploy",
     "validate": "concurrently \"pnpm lint\" \"pnpm lint:styles\" \"pnpm format:check\" \"pnpm types:check\" -p name -n \"Lint,Styles,Format,TS\" -c \"magenta,cyan,yellow,blue\"",
     "lint": "oxlint && eslint",
     "lint:styles": "stylelint \"src/**/*.css\"",
@@ -22,8 +26,12 @@
     "@xyflow/react": "^12.11.0",
     "core-js": "^3.49.0",
     "elkjs": "^0.11.1",
+    "firebase": "^12.14.0",
+    "lib0": "^0.2.117",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.31",
     "zundo": "^2.3.0",
     "zustand": "^5.0.14"
   },
