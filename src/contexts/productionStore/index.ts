@@ -3,7 +3,7 @@ import { useStore } from 'zustand';
 import { create } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 
-import { debounce } from './helpers';
+import { debounce, sameHistoryState } from './helpers';
 import { createClipboardSlice } from './slices/clipboard';
 import { createGraphSlice } from './slices/graph';
 import { createNodeDataSlice } from './slices/nodeData';
@@ -38,14 +38,22 @@ export const useProductionStore = create<ProductionState>()(
       ...createClipboardSlice(set, get),
 
       reset: (nodes = [], edges = []) => {
+        // pause tracking so loading a line isn't itself recorded — otherwise the
+        // debounced push fires *after* clear() and leaves a phantom undo entry
+        const temporal = useProductionStore.temporal.getState();
+        temporal.pause();
         set({ nodes, edges });
+        temporal.resume();
         // drop history so undo can't reach the previous production line
-        useProductionStore.temporal.getState().clear();
+        temporal.clear();
       },
     }),
     {
       // only track graph data in history (not handler/action refs)
       partialize: state => ({ nodes: state.nodes, edges: state.edges }),
+      // ignore React Flow's volatile churn (measured size, selection, drag) so
+      // it doesn't flood history or wipe the redo stack on a re-measure
+      equality: sameHistoryState,
       // group rapid sets (e.g. a node drag) into a single undo step
       // instead of one entry per pixel of movement
       handleSet: handleSet => debounce(handleSet, 400),

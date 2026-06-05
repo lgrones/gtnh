@@ -845,6 +845,21 @@ describe('reset', () => {
     expect(state().nodes).toEqual(nodes);
     expect(history().pastStates).toHaveLength(0);
   });
+
+  it('does not leave a phantom undo entry after the debounce window', () => {
+    const nodes: ProductionNode[] = [
+      {
+        id: 'n1',
+        type: 'inputNode',
+        position: { x: 1, y: 2 },
+        data: { name: 'Ore', quantity: 1 },
+      },
+    ];
+    state().reset(nodes, []);
+    // the debounced push must not fire a recording for the load itself
+    flushHistory();
+    expect(history().pastStates).toHaveLength(0);
+  });
 });
 
 describe('undo / redo', () => {
@@ -858,6 +873,26 @@ describe('undo / redo', () => {
 
     history().redo();
     expect(state().nodes).toHaveLength(1);
+  });
+
+  it('keeps the redo stack across volatile (selection) changes', () => {
+    const a = addNode('recipeNode');
+    flushHistory();
+    addNode('recipeNode');
+    flushHistory();
+    expect(state().nodes).toHaveLength(2);
+
+    history().undo();
+    expect(state().nodes).toHaveLength(1);
+    expect(history().futureStates).toHaveLength(1);
+
+    // React Flow selecting/measuring a node must not record or wipe redo
+    state().onNodesChange([{ id: a, type: 'select', selected: true }]);
+    flushHistory();
+    expect(history().futureStates).toHaveLength(1);
+
+    history().redo();
+    expect(state().nodes).toHaveLength(2);
   });
 
   it('groups a burst of sets into one undo step', () => {

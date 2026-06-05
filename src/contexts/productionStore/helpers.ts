@@ -29,6 +29,33 @@ export const debounce = <Args extends unknown[]>(
   };
 };
 
+// project a graph onto the fields that matter for undo/redo. React Flow mutates
+// nodes with volatile churn (measured size, selection, drag flags) on its own —
+// tracking those would flood history and, worse, wipe the redo stack on every
+// re-measure. compare only id/type/position/data + edge endpoints.
+const historyKey = (nodes: ProductionNode[], edges: Edge[]): string =>
+  JSON.stringify({
+    nodes: nodes.map(node => ({
+      id: node.id,
+      type: node.type,
+      position: node.position,
+      data: node.data,
+    })),
+    edges: edges.map(edge => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: edge.sourceHandle ?? null,
+      targetHandle: edge.targetHandle ?? null,
+    })),
+  });
+
+// zundo `equality`: true => skip this set (no history push, redo stack kept)
+export const sameHistoryState = (
+  a: { nodes: ProductionNode[]; edges: Edge[] },
+  b: { nodes: ProductionNode[]; edges: Edge[] },
+): boolean => historyKey(a.nodes, a.edges) === historyKey(b.nodes, b.edges);
+
 export const createNode = (
   type: ProductionNodeType,
   position: { x: number; y: number },

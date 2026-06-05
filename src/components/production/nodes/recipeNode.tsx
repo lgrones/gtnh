@@ -10,10 +10,9 @@ import {
   Text,
   TextInput,
 } from '@mantine/core';
-import { usePrevious } from '@mantine/hooks';
 import { IconPlus, IconSettings, IconX } from '@tabler/icons-react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { useEffect, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { useShallow } from 'zustand/shallow';
 
 import {
@@ -53,27 +52,40 @@ export const RecipeNode = ({
     })),
   );
 
-  // focus the newest item's name field when a row is added
-  const prevInputs = usePrevious(data.inputs.length);
-  const prevOutputs = usePrevious(data.outputs.length);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const outputRef = useRef<HTMLInputElement>(null);
+  // focus the newest item's name field when a row is added — driven by the add
+  // event, not a length-diff effect. the flag is set on add, then consumed by
+  // the (stable) callback ref of the last row as it mounts
+  const focusInput = useRef(false);
+  const focusOutput = useRef(false);
 
-  useEffect(() => {
-    if (prevInputs !== undefined && prevInputs < data.inputs.length)
-      inputRef.current?.focus();
-  }, [data.inputs.length, prevInputs]);
+  const addInput = () => {
+    focusInput.current = true;
+    addRecipeInput(id);
+  };
 
-  useEffect(() => {
-    if (prevOutputs !== undefined && prevOutputs < data.outputs.length)
-      outputRef.current?.focus();
-  }, [data.outputs.length, prevOutputs]);
+  const addOutput = () => {
+    focusOutput.current = true;
+    addRecipeOutput(id);
+  };
+
+  const inputRef = useCallback((el: HTMLInputElement | null) => {
+    if (el && focusInput.current) {
+      el.focus();
+      focusInput.current = false;
+    }
+  }, []);
+
+  const outputRef = useCallback((el: HTMLInputElement | null) => {
+    if (el && focusOutput.current) {
+      el.focus();
+      focusOutput.current = false;
+    }
+  }, []);
 
   return (
     <ProductionNode id={id} data={data} {...props} type="none" color="indigo">
       <Stack pt="xs">
         <TextInput
-          radius="md"
           placeholder="Machine"
           value={data.machine}
           onChange={event =>
@@ -83,7 +95,6 @@ export const RecipeNode = ({
 
         <Group gap="sm">
           <SegmentedControl
-            radius="md"
             value={data.power}
             onChange={value => updateRecipe(id, { power: value })}
             // the floating indicator measures via getBoundingClientRect, which
@@ -104,7 +115,6 @@ export const RecipeNode = ({
             <>
               <Select
                 w={80}
-                radius="md"
                 data={VOLTAGE_TIERS}
                 value={data.voltage}
                 onChange={value =>
@@ -113,7 +123,6 @@ export const RecipeNode = ({
               />
 
               <NumberInput
-                radius="md"
                 w={64}
                 flex={1}
                 min={1}
@@ -137,7 +146,6 @@ export const RecipeNode = ({
           ) : (
             <>
               <NumberInput
-                radius="md"
                 w={100}
                 min={1}
                 flex={1}
@@ -169,11 +177,7 @@ export const RecipeNode = ({
               Inputs
             </Text>
 
-            <ActionIcon
-              variant="subtle"
-              color="gray"
-              onClick={() => addRecipeInput(id)}
-            >
+            <ActionIcon variant="subtle" color="gray" onClick={addInput}>
               <IconPlus size={16} />
             </ActionIcon>
           </Group>
@@ -191,7 +195,6 @@ export const RecipeNode = ({
                 <NumberInput
                   size="sm"
                   w={60}
-                  radius="md"
                   min={1}
                   allowNegative={false}
                   allowDecimal={false}
@@ -208,7 +211,6 @@ export const RecipeNode = ({
                 <TextInput
                   size="sm"
                   flex={1}
-                  radius="md"
                   placeholder="Item"
                   value={input.name}
                   onChange={event =>
@@ -217,7 +219,7 @@ export const RecipeNode = ({
                     })
                   }
                   ref={i === arr.length - 1 ? inputRef : null}
-                  onKeyDown={e => e.key === 'Enter' && addRecipeInput(id)}
+                  onKeyDown={e => e.key === 'Enter' && addInput()}
                 />
 
                 <ActionIcon
@@ -248,11 +250,7 @@ export const RecipeNode = ({
               Outputs
             </Text>
 
-            <ActionIcon
-              variant="subtle"
-              color="gray"
-              onClick={() => addRecipeOutput(id)}
-            >
+            <ActionIcon variant="subtle" color="gray" onClick={addOutput}>
               <IconPlus size={16} />
             </ActionIcon>
           </Group>
@@ -263,7 +261,6 @@ export const RecipeNode = ({
                 <NumberInput
                   size="sm"
                   w={60}
-                  radius="md"
                   min={1}
                   allowNegative={false}
                   allowDecimal={false}
@@ -280,7 +277,6 @@ export const RecipeNode = ({
                 <TextInput
                   size="sm"
                   flex={1}
-                  radius="md"
                   placeholder="Item"
                   value={output.name}
                   onChange={event =>
@@ -289,7 +285,7 @@ export const RecipeNode = ({
                     })
                   }
                   ref={i === arr.length - 1 ? outputRef : null}
-                  onKeyDown={e => e.key === 'Enter' && addRecipeOutput(id)}
+                  onKeyDown={e => e.key === 'Enter' && addOutput()}
                 />
 
                 <ActionIcon

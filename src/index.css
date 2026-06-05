@@ -10,10 +10,31 @@
   z-index: 0;
 }
 
+/* thicker, more visible edges + arrowheads */
+.react-flow__edge-path,
+.react-flow__connectionline .react-flow__edge-path {
+  stroke-width: 2;
+  stroke: var(--mantine-color-gray-6);
+}
+
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke-width: 3;
+  stroke: var(--mantine-color-indigo-5);
+}
+
+.react-flow__arrowhead {
+  fill: var(--mantine-color-gray-6);
+}
+
 .react-flow__node.draggable {
   cursor: default;
 
   &.dragging .drag-handle_production {
     cursor: grabbing;
   }
+}
+
+.mantine-Modal-header {
+  background-color: transparent;
 }

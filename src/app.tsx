@@ -4,6 +4,7 @@ import '@xyflow/react/dist/style.css';
 import './index.css';
 
 import { Group, MantineProvider, Paper } from '@mantine/core';
+import { ModalsProvider } from '@mantine/modals';
 import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 
@@ -17,7 +18,6 @@ const App = () => {
       <MantineProvider
         defaultColorScheme="dark"
         theme={{
-          defaultRadius: 'lg',
           primaryColor: 'indigo',
           components: {
             Paper: Paper.extend({
@@ -27,7 +27,9 @@ const App = () => {
           },
         }}
       >
-        <RouterProvider router={router} />
+        <ModalsProvider>
+          <RouterProvider router={router} />
+        </ModalsProvider>
       </MantineProvider>
     </StrictMode>
   );

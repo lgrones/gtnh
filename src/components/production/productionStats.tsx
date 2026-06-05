@@ -71,25 +71,32 @@ export const ProductionStats = () => {
       />
 
       <ItemGroup label="Max Amperage">
-        <Item color="red">
-          <Text>
-            {nodes
-              .filter(x => x.type === 'recipeNode')
-              .reduce((acc, curr) => Math.max(acc, curr.data.amperage), 0)}{' '}
-            A
-          </Text>
-        </Item>
+        {!!nodes.filter(x => x.type === 'recipeNode').length && (
+          <Item color="red">
+            <Text>
+              {nodes
+                .filter(x => x.type === 'recipeNode')
+                .reduce(
+                  (acc, curr) => Math.max(acc, curr.data.amperage),
+                  0,
+                )}{' '}
+              A
+            </Text>
+          </Item>
+        )}
       </ItemGroup>
 
       <ItemGroup label="Steam">
-        <Item color="cyan">
-          <Text>
-            {nodes
-              .filter(x => x.type === 'recipeNode')
-              .reduce((acc, curr) => acc + curr.data.steam, 0)}{' '}
-            L/t
-          </Text>
-        </Item>
+        {!!nodes.filter(x => x.type === 'recipeNode').length && (
+          <Item color="cyan">
+            <Text>
+              {nodes
+                .filter(x => x.type === 'recipeNode')
+                .reduce((acc, curr) => acc + curr.data.steam, 0)}{' '}
+              L/t
+            </Text>
+          </Item>
+        )}
       </ItemGroup>
     </Paper>
   );

@@ -7,6 +7,7 @@ import {
   Text,
   TextInput,
 } from '@mantine/core';
+import { modals } from '@mantine/modals';
 import { IconPlus, IconX } from '@tabler/icons-react';
 import { useEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -91,7 +92,19 @@ export const ProductionFlows = () => {
           <ActionIcon
             variant="subtle"
             color="gray"
-            onClick={() => removeGraph(graph.id)}
+            onClick={() =>
+              modals.openConfirmModal({
+                title: 'Delete production line',
+                children: (
+                  <Text size="sm">
+                    You sure you wanna delete this production line?
+                  </Text>
+                ),
+                labels: { confirm: 'Delete', cancel: 'Cancel' },
+                confirmProps: { color: 'red' },
+                onConfirm: () => removeGraph(graph.id),
+              })
+            }
           >
             <IconX size={16} />
           </ActionIcon>
