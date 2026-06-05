@@ -15,7 +15,6 @@ export type {
   DisposalNodeData,
   InputNodeData,
   OutputNodeData,
-  PowerType,
   ProductionNode,
   ProductionNodeType,
   ProductionState,
@@ -25,7 +24,17 @@ export type {
   VoltageTier,
 } from './types';
 export { DRAG_HANDLE_CLASS, VOLTAGE_TIERS } from './types';
-export { layoutNodes, validateGraph, type GraphIssue } from './helpers';
+export {
+  layoutNodes,
+  validateGraph,
+  lineEnergy,
+  demandByTier,
+  recipePower,
+  TICKS_PER_SECOND,
+  type GraphIssue,
+  type LineEnergy,
+  type TierDemand,
+} from './helpers';
 
 // the live editing surface for the active graph. persistence lives in the
 // library store (useProductionLibrary) — this store is hydrated from / synced
@@ -74,6 +83,7 @@ export const useProductionFlow = () =>
       onNodesChange: state.onNodesChange,
       onEdgesChange: state.onEdgesChange,
       onConnect: state.onConnect,
+      onReconnect: state.onReconnect,
       isValidConnection: state.isValidConnection,
     })),
   );

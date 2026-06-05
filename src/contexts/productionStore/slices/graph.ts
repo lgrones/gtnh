@@ -3,11 +3,12 @@ import {
   applyEdgeChanges,
   applyNodeChanges,
   ConnectionLineType,
+  reconnectEdge,
 } from '@xyflow/react';
 
 import {
-  SINK_TYPES,
   createNode,
+  freeSingleSlot,
   isValidConnection,
   syncMirrors,
 } from '../helpers';
@@ -20,6 +21,7 @@ type GraphSlice = Pick<
   | 'onNodesChange'
   | 'onEdgesChange'
   | 'onConnect'
+  | 'onReconnect'
   | 'isValidConnection'
   | 'addNode'
   | 'removeNode'
@@ -27,6 +29,13 @@ type GraphSlice = Pick<
   | 'setEdges'
   | 'deselectAll'
 >;
+
+// shared edge style for both fresh connections and reconnections
+const EDGE_STYLE = {
+  type: ConnectionLineType.SmoothStep,
+  animated: true,
+  markerEnd: { type: 'arrowclosed' as const },
+};
 
 // nodes, edges and the React Flow change handlers — the core graph
 export const createGraphSlice: SliceCreator<GraphSlice> = (set, get) => ({
@@ -52,29 +61,23 @@ export const createGraphSlice: SliceCreator<GraphSlice> = (set, get) => ({
     const nodes = get().nodes;
     // reject recipe<->recipe edges whose item names disagree (leaves mirror)
     if (!isValidConnection(nodes, connection)) return;
-    // sinks mirror a single recipe output — replace any existing incoming edge
-    const targetIsSink = nodes.some(
-      node => node.id === connection.target && SINK_TYPES.has(node.type),
-    );
-    // an input leaf mirrors a single recipe input — replace its outgoing edge
-    const sourceIsInput = nodes.some(
-      node => node.id === connection.source && node.type === 'inputNode',
-    );
-    const base = get().edges.filter(
-      edge =>
-        !(targetIsSink && edge.target === connection.target) &&
-        !(sourceIsInput && edge.source === connection.source),
-    );
+    // free the leaf's single slot, then attach the new edge
+    const base = freeSingleSlot(nodes, get().edges, connection);
+    const edges = addEdge({ ...connection, ...EDGE_STYLE }, base);
+    set({ edges, nodes: syncMirrors(nodes, edges) });
+  },
 
-    const edges = addEdge(
-      {
-        ...connection,
-        type: ConnectionLineType.SmoothStep,
-        animated: true,
-        markerEnd: { type: 'arrowclosed' },
-      },
-      base,
-    );
+  // drag an edge endpoint onto a different handle — keep the edge (and its id),
+  // just move where it lands. invalid drops leave the edge untouched
+  onReconnect: (oldEdge, connection) => {
+    const nodes = get().nodes;
+    if (!isValidConnection(nodes, connection)) return;
+    // free the new endpoint's slot but keep the edge we're moving onto it
+    const base = freeSingleSlot(nodes, get().edges, connection, oldEdge.id);
+    // keep the original edge id so identity/selection survives the move
+    const edges = reconnectEdge(oldEdge, connection, base, {
+      shouldReplaceId: false,
+    });
     set({ edges, nodes: syncMirrors(nodes, edges) });
   },
 

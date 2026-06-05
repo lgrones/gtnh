@@ -1,8 +1,17 @@
 .nav {
   display: grid;
-  grid-template-rows: 1fr 2fr;
+  grid-template-rows: 1fr 3fr;
   gap: var(--mantine-spacing-md);
   padding-block: var(--mantine-spacing-md);
   padding-left: var(--mantine-spacing-md);
+  height: 100dvh;
+}
+
+.aside {
+  display: grid;
+  grid-template-rows: 3fr 1fr;
+  gap: var(--mantine-spacing-md);
+  padding-block: var(--mantine-spacing-md);
+  padding-right: var(--mantine-spacing-md);
   height: 100dvh;
 }

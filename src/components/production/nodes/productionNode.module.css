@@ -1,12 +1,6 @@
 .node {
   padding: var(--mantine-spacing-sm);
 
-  input,
-  :global(.mantine-SegmentedControl-root) {
-    background-color: black;
-    border: 1px solid var(--mantine-color-dark-7);
-  }
-
   &[data-source]::before {
     content: '';
     position: absolute;
@@ -104,28 +98,6 @@
   border-radius: 50%;
   background: var(--node-color);
   border: none;
-}
-
-/*
- * SegmentedControl's floating indicator sizes itself from getBoundingClientRect,
- * which React Flow's viewport zoom scales — then it's re-scaled inside the
- * viewport, so it renders wrong at any zoom != 1. Hide it and restore Mantine's
- * static per-label background (which Mantine disables once the indicator inits).
- */
-.sc-indicator {
-  display: none;
-}
-
-.sc-label {
-  > span {
-    font-weight: 500;
-  }
-
-  &[data-active]::before {
-    display: block !important;
-
-    --sc-color: var(--mantine-color-dark-7);
-  }
 }
 
 .gear {

@@ -16,7 +16,7 @@ interface ProductionFlowControlsProps extends PropsWithChildren {
   onChange?: (opened: boolean) => void;
 }
 
-export const ProductionFlowControls = ({
+export const Controls = ({
   children,
   opened,
   defaultOpened,

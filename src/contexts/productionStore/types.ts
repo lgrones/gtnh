@@ -5,6 +5,7 @@ import {
   type OnConnect,
   type OnEdgesChange,
   type OnNodesChange,
+  type OnReconnect,
 } from '@xyflow/react';
 import { type StoreApi } from 'zustand';
 
@@ -17,9 +18,9 @@ export type ProductionNodeType =
 // class on the grip element; React Flow's dragHandle selector targets it (needs leading dot)
 export const DRAG_HANDLE_CLASS = 'drag-handle_production';
 
-// GTNH voltage tiers, low to high
+// GTNH voltage tiers, low to high. ULV is omitted on purpose — it isn't a real
+// generator tier (LV generators already power ULV machines)
 export const VOLTAGE_TIERS = [
-  'ULV',
   'LV',
   'MV',
   'HV',
@@ -36,9 +37,6 @@ export const VOLTAGE_TIERS = [
   'MAX',
 ] as const;
 export type VoltageTier = (typeof VOLTAGE_TIERS)[number];
-
-// a recipe is powered by electricity (voltage + amperage) or steam — never both
-export type PowerType = 'electric' | 'steam';
 
 // one item slot of a recipe — used for both inputs and outputs
 export interface RecipeItem {
@@ -65,11 +63,11 @@ export interface RecipeNodeData extends BaseNodeData {
   machine: string; // free-text machine name
   inputs: RecipeItem[];
   outputs: RecipeItem[];
-  power: PowerType; // which energy set applies
   voltage: VoltageTier; // electric tier
   amperage: number; // electric amps
-  steam: number; // steam L/t
   multiplier: number; // parallel/batch run count — scales effective I/O
+  eu: number; // total EU consumed by one run of the recipe
+  time: number; // processing time of one run, in seconds
 }
 
 // node typed per variant so data matches the node `type`
@@ -92,6 +90,8 @@ export interface ProductionState {
   onNodesChange: OnNodesChange<ProductionNode>;
   onEdgesChange: OnEdgesChange;
   onConnect: OnConnect;
+  // drag an existing edge's endpoint onto another handle without deleting first
+  onReconnect: OnReconnect;
   isValidConnection: IsValidConnection;
 
   // node ops
@@ -138,7 +138,7 @@ export interface ProductionState {
     patch: Partial<
       Pick<
         RecipeNodeData,
-        'machine' | 'power' | 'voltage' | 'amperage' | 'steam' | 'multiplier'
+        'machine' | 'voltage' | 'amperage' | 'multiplier' | 'eu' | 'time'
       >
     >,
   ) => void;

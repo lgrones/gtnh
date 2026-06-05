@@ -1,6 +1,5 @@
 import {
   ActionIcon,
-  Box,
   Group,
   Paper,
   Stack,
@@ -8,14 +7,14 @@ import {
   TextInput,
 } from '@mantine/core';
 import { modals } from '@mantine/modals';
-import { IconPlus, IconX } from '@tabler/icons-react';
+import { IconPlus, IconTournament, IconX } from '@tabler/icons-react';
 import { useEffect, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { useProductionLibrary } from '@/contexts/productionLibrary';
 import { useProductionStore } from '@/contexts/productionStore';
 
-export const ProductionFlows = () => {
+export const LibPanel = () => {
   const {
     graphs,
     activeId,
@@ -89,7 +88,10 @@ export const ProductionFlows = () => {
       {graphs.map(graph => (
         <Group key={graph.id} gap="xs">
           {graph.id === activeId && (
-            <Box w={12} h={12} bg="gray" style={{ borderRadius: '50%' }} />
+            <IconTournament
+              size={16}
+              color="var(--mantine-color-indigo-filled)"
+            />
           )}
 
           <TextInput
@@ -98,6 +100,9 @@ export const ProductionFlows = () => {
             value={graph.name}
             onFocus={() => selectGraph(graph.id)}
             onChange={e => renameGraph(graph.id, e.currentTarget.value)}
+            styles={{
+              input: { backgroundColor: 'transparent', border: 'none' },
+            }}
           />
 
           <ActionIcon

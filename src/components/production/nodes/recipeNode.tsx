@@ -4,7 +4,6 @@ import {
   Divider,
   Group,
   NumberInput,
-  SegmentedControl,
   Select,
   Stack,
   Text,
@@ -16,6 +15,7 @@ import { useCallback, useRef } from 'react';
 import { useShallow } from 'zustand/shallow';
 
 import {
+  recipePower,
   useProductionStore,
   VOLTAGE_TIERS,
   type ProductionNode as IProductionNode,
@@ -87,7 +87,7 @@ export const RecipeNode = ({
       <Stack pt="xs">
         <Group gap="sm" wrap="nowrap">
           <TextInput
-            flex={1}
+            w={180}
             placeholder="Machine"
             value={data.machine}
             onChange={event =>
@@ -95,8 +95,16 @@ export const RecipeNode = ({
             }
           />
 
-          <NumberInput
+          <Select
             w={80}
+            data={VOLTAGE_TIERS}
+            value={data.voltage}
+            onChange={value => value && updateRecipe(id, { voltage: value })}
+            comboboxProps={{ width: 'auto' }}
+          />
+
+          <NumberInput
+            w={96}
             min={1}
             hideControls
             allowNegative={false}
@@ -107,90 +115,99 @@ export const RecipeNode = ({
                 multiplier: typeof value === 'number' ? value : data.multiplier,
               })
             }
-            leftSection={
-              <Text size="sm" c="dimmed">
-                ×
+            rightSection={
+              <Text size="sm" c="dimmed" pr={6}>
+                Cycles
               </Text>
             }
-            leftSectionPointerEvents="none"
+            rightSectionPointerEvents="none"
+            rightSectionWidth={56}
           />
         </Group>
 
-        <Group gap="sm">
-          <SegmentedControl
-            value={data.power}
-            onChange={value => updateRecipe(id, { power: value })}
-            // the floating indicator measures via getBoundingClientRect, which
-            // is scaled by React Flow's viewport zoom and then re-scaled inside
-            // it -> wrong size/pos at any zoom != 1. hide it and fall back to
-            // Mantine's static per-label background (see productionNode.module.css)
-            classNames={{
-              indicator: classes['sc-indicator'],
-              label: classes['sc-label'],
-            }}
-            data={[
-              { label: 'Electric', value: 'electric' },
-              { label: 'Steam', value: 'steam' },
-            ]}
-          />
+        <Divider />
 
-          {data.power === 'electric' ? (
-            <>
-              <Select
-                w={80}
-                data={VOLTAGE_TIERS}
-                value={data.voltage}
-                onChange={value =>
-                  value && updateRecipe(id, { voltage: value })
-                }
-              />
+        <Box>
+          <Group justify="space-between" pb={4}>
+            <Text c="dimmed" size="xs" tt="uppercase" fw="600">
+              Energy
+            </Text>
 
-              <NumberInput
-                w={64}
-                flex={1}
-                min={1}
-                hideControls
-                allowNegative={false}
-                allowDecimal={false}
-                value={data.amperage}
-                onChange={value =>
-                  updateRecipe(id, {
-                    amperage: typeof value === 'number' ? value : data.amperage,
-                  })
-                }
-                rightSection={
-                  <Text size="sm" c="dimmed" pr={6}>
-                    A
-                  </Text>
-                }
-                rightSectionPointerEvents="none"
-              />
-            </>
-          ) : (
-            <>
-              <NumberInput
-                w={100}
-                min={1}
-                flex={1}
-                hideControls
-                allowNegative={false}
-                allowDecimal={false}
-                value={data.steam}
-                onChange={value =>
-                  updateRecipe(id, {
-                    steam: typeof value === 'number' ? value : data.steam,
-                  })
-                }
-                rightSection={
-                  <Text size="sm" c="dimmed" pr={6}>
-                    L/t
-                  </Text>
-                }
-                rightSectionPointerEvents="none"
-              />
-            </>
-          )}
-        </Group>
+            <Text size="sm" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+              {recipePower(data).toLocaleString(undefined, {
+                maximumFractionDigits: 1,
+              })}{' '}
+              EU/t
+            </Text>
+          </Group>
+
+          <Group gap="sm">
+            <NumberInput
+              w={216}
+              min={0}
+              hideControls
+              allowNegative={false}
+              thousandSeparator=","
+              value={data.eu}
+              onChange={value =>
+                updateRecipe(id, {
+                  eu: typeof value === 'number' ? value : data.eu,
+                })
+              }
+              rightSection={
+                <Text
+                  size="sm"
+                  c="dimmed"
+                  pr={6}
+                  style={{ whiteSpace: 'nowrap' }}
+                >
+                  Total EU
+                </Text>
+              }
+              rightSectionPointerEvents="none"
+              rightSectionWidth={70}
+            />
+
+            <NumberInput
+              w={70}
+              min={0}
+              hideControls
+              allowNegative={false}
+              value={data.time}
+              onChange={value =>
+                updateRecipe(id, {
+                  time: typeof value === 'number' ? value : data.time,
+                })
+              }
+              rightSection={
+                <Text size="sm" c="dimmed" pr={6}>
+                  s
+                </Text>
+              }
+              rightSectionPointerEvents="none"
+            />
+
+            <NumberInput
+              w={70}
+              min={1}
+              hideControls
+              allowNegative={false}
+              allowDecimal={false}
+              value={data.amperage}
+              onChange={value =>
+                updateRecipe(id, {
+                  amperage: typeof value === 'number' ? value : data.amperage,
+                })
+              }
+              rightSection={
+                <Text size="sm" c="dimmed" pr={6}>
+                  A
+                </Text>
+              }
+              rightSectionPointerEvents="none"
+            />
+          </Group>
+        </Box>
 
         <Divider />
 

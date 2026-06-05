@@ -2,7 +2,7 @@ import { Button, Center, Paper, Stack, Text } from '@mantine/core';
 import { IconPlus } from '@tabler/icons-react';
 import {
   Background,
-  Controls,
+  Controls as FlowControls,
   MiniMap,
   Panel,
   ReactFlow,
@@ -16,10 +16,10 @@ import {
 } from '@/contexts/productionLibrary';
 import { useProductionFlow } from '@/contexts/productionStore';
 
+import { Controls } from './controls';
 import { nodeTypes } from './nodes/nodeTypes';
-import { ProductionFlowControls } from './productionFlowControls';
 
-export const ProductionFlow = () => {
+export const Flow = () => {
   const flowProps = useProductionFlow();
   const activeGraph = useActiveGraph();
   const createGraph = useProductionLibrary(state => state.createGraph);
@@ -27,7 +27,6 @@ export const ProductionFlow = () => {
 
   const closeMenu = useCallback(() => setMenuOpened(false), []);
 
-  // no saved line selected — nothing to show, offer to create one
   if (!activeGraph)
     return (
       <Center h="100%">
@@ -35,8 +34,8 @@ export const ProductionFlow = () => {
           <Text c="dimmed">No production line</Text>
 
           <Button
-            variant="light"
-            color="indigo"
+            variant="filled"
+            color="gray"
             leftSection={<IconPlus size={16} />}
             onClick={createGraph}
           >
@@ -48,7 +47,7 @@ export const ProductionFlow = () => {
 
   return (
     <ReactFlowProvider>
-      <ProductionFlowControls opened={menuOpened} onChange={setMenuOpened}>
+      <Controls opened={menuOpened} onChange={setMenuOpened}>
         <Paper h="100%">
           <ReactFlow
             {...flowProps}
@@ -70,11 +69,18 @@ export const ProductionFlow = () => {
           >
             <MiniMap />
             <Background />
-            <Controls />
+            <FlowControls />
             <Panel position="top-left">{activeGraph.name}</Panel>
+            {!activeGraph.nodes.length && (
+              <Panel position="center-left" style={{ width: '100%' }}>
+                <Text ta="center">
+                  Starting placing Nodes with right-clicking or using shortcuts
+                </Text>
+              </Panel>
+            )}
           </ReactFlow>
         </Paper>
-      </ProductionFlowControls>
+      </Controls>
     </ReactFlowProvider>
   );
 };

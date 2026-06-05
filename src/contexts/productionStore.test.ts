@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   layoutNodes,
+  lineEnergy,
+  demandByTier,
+  recipePower,
   useProductionStore,
   validateGraph,
   type RecipeNodeData,
@@ -71,11 +74,11 @@ describe('addNode', () => {
     expect(data.outputs).toEqual([]);
     expect(data).toMatchObject({
       machine: '',
-      power: 'electric',
       voltage: 'LV',
       amperage: 1,
-      steam: 0,
       multiplier: 1,
+      eu: 0,
+      time: 0,
     });
   });
 
@@ -118,11 +121,11 @@ describe('renameNode', () => {
 describe('updateRecipe', () => {
   it('patches scalar recipe fields', () => {
     const id = addNode('recipeNode');
-    state().updateRecipe(id, { machine: 'EBF', power: 'steam', steam: 320 });
+    state().updateRecipe(id, { machine: 'EBF', voltage: 'EV', amperage: 4 });
     expect(recipeData(id)).toMatchObject({
       machine: 'EBF',
-      power: 'steam',
-      steam: 320,
+      voltage: 'EV',
+      amperage: 4,
     });
   });
 
@@ -205,6 +208,95 @@ describe('onConnect', () => {
     });
     expect(state().edges).toHaveLength(1);
     expect(state().edges[0]!.animated).toBe(true);
+  });
+});
+
+describe('onReconnect', () => {
+  // wire input-leaf -> recipe A, returning the edge plus a second recipe B
+  const setup = () => {
+    const input = addNode('inputNode');
+    const a = addNode('recipeNode');
+    const aIn = addInput(a);
+    const b = addNode('recipeNode');
+    const bIn = addInput(b);
+    state().onConnect({
+      source: input,
+      target: a,
+      sourceHandle: null,
+      targetHandle: aIn,
+    });
+    const edge = state().edges[0]!;
+    return { input, a, aIn, b, bIn, edge };
+  };
+
+  it('moves an edge endpoint, keeping the same edge id', () => {
+    const { input, b, bIn, edge } = setup();
+    state().onReconnect(edge, {
+      source: input,
+      target: b,
+      sourceHandle: null,
+      targetHandle: bIn,
+    });
+
+    expect(state().edges).toHaveLength(1);
+    expect(state().edges[0]!.id).toBe(edge.id);
+    expect(state().edges[0]!.target).toBe(b);
+  });
+
+  it('leaves the edge untouched on an invalid reconnection', () => {
+    const { a, aIn, b, edge } = setup();
+    // two recipe items with disagreeing (empty) names -> invalid
+    const bOut = addOutput(b);
+    state().updateRecipeOutput(b, bOut, { name: 'Ore' });
+    state().updateRecipeInput(a, aIn, { name: 'Plate' });
+
+    state().onReconnect(edge, {
+      source: b,
+      target: a,
+      sourceHandle: bOut,
+      targetHandle: aIn,
+    });
+
+    expect(state().edges[0]!.source).toBe(edge.source);
+    expect(state().edges[0]!.target).toBe(edge.target);
+  });
+
+  it('evicts an edge already in the target sink slot on reconnect', () => {
+    const recipe = addNode('recipeNode');
+    const out1 = addOutput(recipe);
+    const out2 = addOutput(recipe);
+    state().updateRecipeOutput(recipe, out1, { name: 'A' });
+    state().updateRecipeOutput(recipe, out2, { name: 'B' });
+    const sink = addNode('outputNode');
+
+    // sink fed by out1
+    state().onConnect({
+      source: recipe,
+      target: sink,
+      sourceHandle: out1,
+      targetHandle: null,
+    });
+    // a second edge out2 -> different sink, then reconnect it onto the busy sink
+    const sink2 = addNode('disposalNode');
+    state().onConnect({
+      source: recipe,
+      target: sink2,
+      sourceHandle: out2,
+      targetHandle: null,
+    });
+    const moving = state().edges.find(e => e.target === sink2)!;
+
+    state().onReconnect(moving, {
+      source: recipe,
+      target: sink,
+      sourceHandle: out2,
+      targetHandle: null,
+    });
+
+    // the old out1 edge was evicted; only the reconnected edge feeds the sink
+    const toSink = state().edges.filter(e => e.target === sink);
+    expect(toSink).toHaveLength(1);
+    expect(toSink[0]!.id).toBe(moving.id);
   });
 });
 
@@ -754,6 +846,86 @@ describe('recipe multiplier', () => {
 
     state().updateRecipe(a, { multiplier: 3 });
     expect(leafData(sink).quantity).toBe(12);
+  });
+});
+
+describe('recipePower', () => {
+  it('derives EU/t from total EU over the tick duration', () => {
+    const id = addNode('recipeNode');
+    // 6400 EU over 16s = 320 ticks -> 20 EU/t
+    state().updateRecipe(id, { eu: 6400, time: 16 });
+    expect(recipePower(recipeData(id))).toBe(20);
+  });
+
+  it('is zero when time is zero (avoids divide-by-zero)', () => {
+    const id = addNode('recipeNode');
+    state().updateRecipe(id, { eu: 6400, time: 0 });
+    expect(recipePower(recipeData(id))).toBe(0);
+  });
+});
+
+describe('lineEnergy', () => {
+  it('sums power across recipes, ignoring the multiplier for demand', () => {
+    const a = addNode('recipeNode');
+    state().updateRecipe(a, { eu: 6400, time: 16, multiplier: 3 }); // 20 EU/t
+    const b = addNode('recipeNode');
+    state().updateRecipe(b, { eu: 1280, time: 16 }); // 4 EU/t
+
+    // multiplier scales time, not instantaneous draw -> 24 EU/t total
+    expect(lineEnergy(state().nodes, state().edges).demand).toBe(24);
+  });
+
+  it('takes the critical path as total time, scaled by multiplier', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore' });
+    state().updateRecipe(a, { eu: 0, time: 10, multiplier: 2 }); // 20s
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore' });
+    state().updateRecipe(b, { eu: 0, time: 30 }); // 30s
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+
+    // chain a(20s) -> b(30s) = 50s longest path
+    expect(lineEnergy(state().nodes, state().edges).time).toBe(50);
+  });
+
+  it('runs independent branches in parallel (longest, not sum)', () => {
+    const a = addNode('recipeNode');
+    state().updateRecipe(a, { eu: 0, time: 40 });
+    const b = addNode('recipeNode');
+    state().updateRecipe(b, { eu: 0, time: 25 });
+    // no edges: two disjoint nodes run concurrently
+
+    expect(lineEnergy(state().nodes, state().edges).time).toBe(40);
+  });
+});
+
+describe('demandByTier', () => {
+  it('sums power but takes the peak single-machine amperage per tier', () => {
+    const a = addNode('recipeNode');
+    state().updateRecipe(a, { eu: 6400, time: 16, voltage: 'MV', amperage: 2 }); // 20 EU/t
+    const b = addNode('recipeNode');
+    state().updateRecipe(b, { eu: 1280, time: 16, voltage: 'MV', amperage: 1 }); // 4 EU/t
+    const c = addNode('recipeNode');
+    state().updateRecipe(c, { eu: 320, time: 16, voltage: 'LV', amperage: 1 }); // 1 EU/t
+
+    const byTier = demandByTier(state().nodes);
+    // MV power summed (24), but amps is the max of the two machines (2), not 3
+    expect(byTier.get('MV')).toEqual({ power: 24, amps: 2 });
+    expect(byTier.get('LV')).toEqual({ power: 1, amps: 1 });
+  });
+
+  it('omits zero-power recipes', () => {
+    const idle = addNode('recipeNode');
+    state().updateRecipe(idle, { eu: 0, time: 16, voltage: 'HV' });
+
+    expect(demandByTier(state().nodes).size).toBe(0);
   });
 });
 

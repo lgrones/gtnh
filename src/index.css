@@ -42,3 +42,14 @@
 .mantine-Modal-header {
   background-color: transparent;
 }
+
+.mantine-Input-input,
+.mantine-SegmentedControl-root {
+  background-color: black;
+  border: 1px solid var(--mantine-color-dark-7);
+}
+
+.mantine-InputWrapper-label {
+  color: var(--mantine-color-dimmed);
+  font-weight: 500;
+}

@@ -1,9 +1,11 @@
 import { AppShell, Box } from '@mantine/core';
 import { createFileRoute } from '@tanstack/react-router';
 
-import { ProductionFlow } from '@/components/production/productionFlow';
-import { ProductionFlows } from '@/components/production/productionFlows';
-import { ProductionStats } from '@/components/production/productionStats';
+import { EnergyPanel } from '@/components/production/energyPanel';
+import { Flow } from '@/components/production/flow';
+import { IssuePanel } from '@/components/production/issuePanel';
+import { LibPanel } from '@/components/production/libPanel';
+import { StatsPanel } from '@/components/production/statsPanel';
 
 import classes from './index.module.css';
 
@@ -11,19 +13,26 @@ const Index = () => {
   return (
     <AppShell
       padding="md"
-      navbar={{ width: 400, breakpoint: 0 }}
+      navbar={{ width: 340, breakpoint: 0 }}
+      aside={{ width: 340, breakpoint: 0 }}
       withBorder={false}
     >
       <AppShell.Navbar>
         <Box className={classes.nav}>
-          <ProductionFlows />
+          <LibPanel />
 
-          <ProductionStats />
+          <StatsPanel />
         </Box>
       </AppShell.Navbar>
 
+      <AppShell.Aside className={classes.aside}>
+        <EnergyPanel />
+
+        <IssuePanel />
+      </AppShell.Aside>
+
       <AppShell.Main h="100dvh">
-        <ProductionFlow />
+        <Flow />
       </AppShell.Main>
     </AppShell>
   );

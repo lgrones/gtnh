@@ -7,6 +7,7 @@ import {
   type ProductionNodeType,
   type RecipeItem,
   type RecipeNodeData,
+  type VoltageTier,
 } from './types';
 
 // collapse a burst of calls into one invocation, fired after the burst ends
@@ -77,11 +78,11 @@ export const createNode = (
           machine: '',
           inputs: [],
           outputs: [],
-          power: 'electric',
           voltage: 'LV',
           amperage: 1,
-          steam: 0,
           multiplier: 1,
+          eu: 0,
+          time: 0,
         },
       };
     case 'inputNode':
@@ -93,17 +94,22 @@ export const createNode = (
   }
 };
 
-// backfill fields added after some graphs were already persisted — `multiplier`
-// is absent from recipe nodes saved before it existed; default it to 1 on load
+// backfill fields added after some graphs were already persisted — `multiplier`,
+// `eu` and `time` are absent from recipe nodes saved before they existed; default
+// them on load so older lines keep working
 export const normalizeNodes = (nodes: ProductionNode[]): ProductionNode[] =>
   nodes.map(node => {
     if (node.type !== 'recipeNode') return node;
-    const data = node.data as Omit<RecipeNodeData, 'multiplier'> & {
-      multiplier?: number;
+    const data = node.data as Partial<RecipeNodeData>;
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        multiplier: data.multiplier ?? 1,
+        eu: data.eu ?? 0,
+        time: data.time ?? 0,
+      },
     };
-    return data.multiplier === undefined
-      ? { ...node, data: { ...node.data, multiplier: 1 } }
-      : node;
   });
 
 // fallback node size when React Flow hasn't measured a node yet
@@ -273,6 +279,31 @@ export const isValidConnection = (
   return a !== '' && a === b;
 };
 
+// drop edges already occupying the single leaf slot that `connection` claims —
+// a sink mirrors one incoming edge, an input leaf emits one — so a new edge to
+// that endpoint evicts the old. `keepId` is preserved (the edge being
+// reconnected onto the slot is the one we're keeping, not evicting)
+export const freeSingleSlot = (
+  nodes: ProductionNode[],
+  edges: Edge[],
+  connection: Connection | Edge,
+  keepId?: string,
+): Edge[] => {
+  const targetIsSink = nodes.some(
+    node => node.id === connection.target && SINK_TYPES.has(node.type),
+  );
+  const sourceIsInput = nodes.some(
+    node => node.id === connection.source && node.type === 'inputNode',
+  );
+
+  return edges.filter(
+    edge =>
+      edge.id === keepId ||
+      (!(targetIsSink && edge.target === connection.target) &&
+        !(sourceIsInput && edge.source === connection.source)),
+  );
+};
+
 // sync every mirror leaf's name + quantity to its connected recipe item:
 //   - sinks (output/disposal) mirror the upstream recipe OUTPUT they receive,
 //     but only the leftover quantity after downstream recipes take their share
@@ -423,4 +454,105 @@ export const validateGraph = (
   }
 
   return issues;
+};
+
+export const TICKS_PER_SECOND = 20;
+
+// a recipe's instantaneous power draw (EU/t) = total EU over its tick duration.
+// `multiplier` (sequential run count) scales TIME, not power — one machine still
+// runs a single cycle at a time — so it is intentionally absent here
+export const recipePower = (data: RecipeNodeData): number =>
+  data.time > 0 ? data.eu / (data.time * TICKS_PER_SECOND) : 0;
+
+// a recipe node's wall-clock time: one cycle's seconds × its sequential runs
+const recipeTime = (data: RecipeNodeData): number =>
+  data.time * data.multiplier;
+
+export interface LineEnergy {
+  demand: number; // peak power draw (EU/t) — all recipes assumed concurrent
+  time: number; // critical-path duration (seconds) of the whole line
+}
+
+// peak demand and total runtime for a production line:
+//   - demand: Σ EU/t over every recipe (each its own machine)
+//   - time: longest dependency chain through the graph (edges = ordering).
+//     independent branches run in parallel; copying a node parallelizes its
+//     runs. node weight = recipeTime; leaf nodes (input/output/disposal) weigh 0
+export const lineEnergy = (
+  nodes: ProductionNode[],
+  edges: Edge[],
+): LineEnergy => {
+  let demand = 0;
+
+  const weight = new Map<string, number>();
+  for (const node of nodes) {
+    if (node.type !== 'recipeNode') continue;
+    demand += recipePower(node.data);
+    weight.set(node.id, recipeTime(node.data));
+  }
+
+  // successor adjacency: an edge source must finish before its target starts
+  const successors = new Map<string, string[]>();
+  for (const edge of edges) {
+    let list = successors.get(edge.source);
+    if (list === undefined) successors.set(edge.source, (list = []));
+    list.push(edge.target);
+  }
+
+  // longest path ending-inclusive at each node, memoized; `visiting` guards
+  // against cycles (a malformed graph) by treating the back-edge as weight 0
+  const longest = new Map<string, number>();
+  const visiting = new Set<string>();
+
+  const walk = (id: string): number => {
+    const cached = longest.get(id);
+    if (cached !== undefined) return cached;
+    if (visiting.has(id)) return 0;
+
+    visiting.add(id);
+    let downstream = 0;
+    for (const next of successors.get(id) ?? [])
+      downstream = Math.max(downstream, walk(next));
+    visiting.delete(id);
+
+    const total = (weight.get(id) ?? 0) + downstream;
+    longest.set(id, total);
+    return total;
+  };
+
+  let time = 0;
+  for (const node of nodes) time = Math.max(time, walk(node.id));
+
+  return { demand, time };
+};
+
+// electric load at a voltage tier: total power draw and peak single-machine
+// amperage. a generator outputs exactly 1A, so a machine drawing N amps needs N
+// generators feeding it — the tier therefore needs at least `amps` (the highest
+// single machine's draw) generators, regardless of how the power total divides
+export interface TierDemand {
+  power: number; // EU/t summed over machines at this tier
+  amps: number; // highest amperage of any single machine at this tier
+}
+
+// electric demand split by machine voltage tier. a generator may only power a
+// machine of its own tier — overvolting makes machines explode — so generators
+// must be sized per bucket, not against the lumped total
+export const demandByTier = (
+  nodes: ProductionNode[],
+): Map<VoltageTier, TierDemand> => {
+  const byTier = new Map<VoltageTier, TierDemand>();
+
+  for (const node of nodes) {
+    if (node.type !== 'recipeNode') continue;
+    const power = recipePower(node.data);
+    if (power <= 0) continue;
+
+    const current = byTier.get(node.data.voltage) ?? { power: 0, amps: 0 };
+    current.power += power;
+    current.amps = Math.max(current.amps, node.data.amperage);
+    byTier.set(node.data.voltage, current);
+  }
+
+  return byTier;
 };
