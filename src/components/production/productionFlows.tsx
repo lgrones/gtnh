@@ -9,7 +9,7 @@ import {
 } from '@mantine/core';
 import { modals } from '@mantine/modals';
 import { IconPlus, IconX } from '@tabler/icons-react';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { useProductionLibrary } from '@/contexts/productionLibrary';
@@ -35,6 +35,12 @@ export const ProductionFlows = () => {
   );
   const reset = useProductionStore(state => state.reset);
 
+  // which graph the working store currently holds. guards the save subscribe
+  // against the switch window: when activeId flips, the store still has the OLD
+  // graph until the load effect below runs — saving then would write the old
+  // nodes under the new id and clobber it. only persist once they match.
+  const loadedId = useRef<string | null>(null);
+
   // load the active saved graph into the working store whenever it changes
   // (depends on activeId only — saveActive must not retrigger this)
   useEffect(() => {
@@ -43,14 +49,19 @@ export const ProductionFlows = () => {
       .graphs.find(g => g.id === activeId);
 
     reset(graph?.nodes ?? [], graph?.edges ?? []);
+    loadedId.current = activeId;
   }, [activeId, reset]);
 
   // sync every working-store edit back into the active saved graph
   useEffect(
     () =>
-      useProductionStore.subscribe(state =>
-        useProductionLibrary.getState().saveActive(state.nodes, state.edges),
-      ),
+      useProductionStore.subscribe(state => {
+        const library = useProductionLibrary.getState();
+        // skip emissions while the store doesn't yet reflect the active graph
+        // (load race) — otherwise we'd persist stale/empty state over it
+        if (loadedId.current !== library.activeId) return;
+        library.saveActive(state.nodes, state.edges);
+      }),
     [],
   );
 

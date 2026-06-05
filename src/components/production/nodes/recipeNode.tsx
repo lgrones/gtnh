@@ -85,13 +85,36 @@ export const RecipeNode = ({
   return (
     <ProductionNode id={id} data={data} {...props} type="none" color="indigo">
       <Stack pt="xs">
-        <TextInput
-          placeholder="Machine"
-          value={data.machine}
-          onChange={event =>
-            updateRecipe(id, { machine: event.currentTarget.value })
-          }
-        />
+        <Group gap="sm" wrap="nowrap">
+          <TextInput
+            flex={1}
+            placeholder="Machine"
+            value={data.machine}
+            onChange={event =>
+              updateRecipe(id, { machine: event.currentTarget.value })
+            }
+          />
+
+          <NumberInput
+            w={80}
+            min={1}
+            hideControls
+            allowNegative={false}
+            allowDecimal={false}
+            value={data.multiplier}
+            onChange={value =>
+              updateRecipe(id, {
+                multiplier: typeof value === 'number' ? value : data.multiplier,
+              })
+            }
+            leftSection={
+              <Text size="sm" c="dimmed">
+                ×
+              </Text>
+            }
+            leftSectionPointerEvents="none"
+          />
+        </Group>
 
         <Group gap="sm">
           <SegmentedControl

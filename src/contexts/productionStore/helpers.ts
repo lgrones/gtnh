@@ -1,4 +1,5 @@
 import { type Connection, type Edge } from '@xyflow/react';
+import ELK, { type ElkNode } from 'elkjs/lib/elk.bundled.js';
 
 import {
   DRAG_HANDLE_CLASS,
@@ -80,6 +81,7 @@ export const createNode = (
           voltage: 'LV',
           amperage: 1,
           steam: 0,
+          multiplier: 1,
         },
       };
     case 'inputNode':
@@ -89,6 +91,90 @@ export const createNode = (
     case 'disposalNode':
       return { ...base, type, data: { name: 'Disposal', quantity: 0 } };
   }
+};
+
+// backfill fields added after some graphs were already persisted — `multiplier`
+// is absent from recipe nodes saved before it existed; default it to 1 on load
+export const normalizeNodes = (nodes: ProductionNode[]): ProductionNode[] =>
+  nodes.map(node => {
+    if (node.type !== 'recipeNode') return node;
+    const data = node.data as Omit<RecipeNodeData, 'multiplier'> & {
+      multiplier?: number;
+    };
+    return data.multiplier === undefined
+      ? { ...node, data: { ...node.data, multiplier: 1 } }
+      : node;
+  });
+
+// fallback node size when React Flow hasn't measured a node yet
+const DEFAULT_NODE_SIZE = { width: 280, height: 160 };
+
+const elk = new ELK();
+
+// arrange the graph into left-to-right layers with ELK. recipe input/output
+// handles become fixed-order ports (inputs WEST, outputs EAST) so ELK orders
+// nodes to keep edges aligned with each recipe's row order — minimal crossings.
+// uses measured sizes (falls back to a default); ELK returns top-left positions
+export const layoutNodes = async (
+  nodes: ProductionNode[],
+  edges: Edge[],
+): Promise<ProductionNode[]> => {
+  const graph: ElkNode = {
+    id: 'root',
+    layoutOptions: {
+      'elk.algorithm': 'layered',
+      'elk.direction': 'RIGHT',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '96',
+      'elk.spacing.nodeNode': '32',
+    },
+    children: nodes.map(node => {
+      const base = {
+        id: node.id,
+        width: node.measured?.width ?? DEFAULT_NODE_SIZE.width,
+        height: node.measured?.height ?? DEFAULT_NODE_SIZE.height,
+      };
+      if (node.type !== 'recipeNode') return base;
+
+      // ELK numbers ports clockwise: WEST runs bottom->top (invert the row
+      // index), EAST runs top->bottom (row index as-is)
+      const ports = [
+        ...node.data.inputs.map((input, i) => ({
+          id: input.id,
+          layoutOptions: {
+            'elk.port.side': 'WEST',
+            'elk.port.index': String(node.data.inputs.length - 1 - i),
+          },
+        })),
+        ...node.data.outputs.map((output, i) => ({
+          id: output.id,
+          layoutOptions: {
+            'elk.port.side': 'EAST',
+            'elk.port.index': String(i),
+          },
+        })),
+      ];
+      return {
+        ...base,
+        ports,
+        layoutOptions: { 'elk.portConstraints': 'FIXED_ORDER' },
+      };
+    }),
+    edges: edges.map(edge => ({
+      id: edge.id,
+      sources: [edge.sourceHandle ?? edge.source],
+      targets: [edge.targetHandle ?? edge.target],
+    })),
+  };
+
+  const laid = await elk.layout(graph);
+  const positions = new Map(laid.children?.map(child => [child.id, child]));
+
+  return nodes.map(node => {
+    const child = positions.get(node.id);
+    return child
+      ? { ...node, position: { x: child.x ?? 0, y: child.y ?? 0 } }
+      : node;
+  });
 };
 
 // update data of a single recipe node, leaving other nodes untouched
@@ -109,25 +195,29 @@ export const SINK_TYPES = new Set<ProductionNodeType>([
   'disposalNode',
 ]);
 
-// `${recipeId}:${itemId}` -> recipe item, indexed for both inputs and outputs
+// `${recipeId}:${itemId}` -> recipe item, indexed for both inputs and outputs,
+// plus each recipe's run multiplier keyed by node id
 interface ItemIndex {
   outputs: Map<string, RecipeItem>;
   inputs: Map<string, RecipeItem>;
+  multipliers: Map<string, number>;
 }
 
 const indexRecipeItems = (nodes: ProductionNode[]): ItemIndex => {
   const outputs = new Map<string, RecipeItem>();
   const inputs = new Map<string, RecipeItem>();
+  const multipliers = new Map<string, number>();
 
   for (const node of nodes) {
     if (node.type !== 'recipeNode') continue;
+    multipliers.set(node.id, node.data.multiplier);
     for (const output of node.data.outputs)
       outputs.set(`${node.id}:${output.id}`, output);
     for (const input of node.data.inputs)
       inputs.set(`${node.id}:${input.id}`, input);
   }
 
-  return { outputs, inputs };
+  return { outputs, inputs, multipliers };
 };
 
 // look up a recipe item by node + handle id; undefined for leaf nodes /
@@ -151,8 +241,10 @@ const demandByOutput = (
     if (!edge.sourceHandle || !edge.targetHandle) continue;
     const input = recipeItem(index, edge.target, edge.targetHandle, 'inputs');
     if (input === undefined) continue;
+    // scale by the consuming recipe's run count
+    const runs = index.multipliers.get(edge.target) ?? 1;
     const key = `${edge.source}:${edge.sourceHandle}`;
-    demand.set(key, (demand.get(key) ?? 0) + input.quantity);
+    demand.set(key, (demand.get(key) ?? 0) + input.quantity * runs);
   }
 
   return demand;
@@ -207,13 +299,15 @@ export const syncMirrors = (
         edge.sourceHandle,
         'outputs',
       );
-      if (output !== undefined)
+      if (output !== undefined) {
+        const supply =
+          output.quantity * (index.multipliers.get(edge.source) ?? 1);
         mirrors.set(edge.target, {
           name: output.name,
           quantity:
-            output.quantity -
-            (demand.get(`${edge.source}:${edge.sourceHandle}`) ?? 0),
+            supply - (demand.get(`${edge.source}:${edge.sourceHandle}`) ?? 0),
         });
+      }
     }
     // input node feeding a recipe input (edge enters a recipe input handle)
     if (edge.targetHandle) {
@@ -221,7 +315,7 @@ export const syncMirrors = (
       if (input !== undefined)
         mirrors.set(edge.source, {
           name: input.name,
-          quantity: input.quantity,
+          quantity: input.quantity * (index.multipliers.get(edge.target) ?? 1),
         });
     }
   }
@@ -295,24 +389,26 @@ export const validateGraph = (
     for (const output of node.data.outputs) {
       const key = `${node.id}:${output.id}`;
       const needed = demand.get(key) ?? 0;
+      // produced over all runs of this recipe
+      const supply = output.quantity * node.data.multiplier;
 
-      if (needed > output.quantity)
+      if (needed > supply)
         // deficit — blame each receiving recipe
         for (const recipeId of receivers.get(key) ?? [])
           issues.push({
             recipe: names.get(recipeId) ?? '',
             item: output.name,
             kind: 'deficit',
-            supply: output.quantity,
+            supply,
             demand: needed,
           });
-      else if (!absorbed.has(key) && output.quantity - needed > 0)
+      else if (!absorbed.has(key) && supply - needed > 0)
         // leftover with nowhere to go (no sink); includes unconnected outputs
         issues.push({
           recipe: node.data.name,
           item: output.name,
           kind: 'surplus',
-          supply: output.quantity,
+          supply,
           demand: needed,
         });
     }

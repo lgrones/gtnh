@@ -17,7 +17,11 @@
   stroke: var(--mantine-color-gray-6);
 }
 
+/* match xyflow's `.selectable:focus` specificity (0,4,0) so a focused selected
+   edge isn't overridden back to the default selected stroke */
 .react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge.selectable:focus .react-flow__edge-path,
+.react-flow__edge.selectable:focus-visible .react-flow__edge-path,
 .react-flow__edge:hover .react-flow__edge-path {
   stroke-width: 3;
   stroke: var(--mantine-color-indigo-5);

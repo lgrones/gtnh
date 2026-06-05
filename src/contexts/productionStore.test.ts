@@ -2,6 +2,7 @@ import type { Edge } from '@xyflow/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  layoutNodes,
   useProductionStore,
   validateGraph,
   type RecipeNodeData,
@@ -74,6 +75,7 @@ describe('addNode', () => {
       voltage: 'LV',
       amperage: 1,
       steam: 0,
+      multiplier: 1,
     });
   });
 
@@ -665,6 +667,119 @@ describe('validateGraph', () => {
   });
 });
 
+describe('recipe multiplier', () => {
+  const leafData = (id: string) =>
+    state().nodes.find(n => n.id === id)!.data as SinkNodeData;
+
+  it('scales supply so a higher producer multiplier clears a deficit', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Plate', quantity: 1 });
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Plate', quantity: 2 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+
+    // 1/cycle vs 2 needed -> deficit at multiplier 1
+    expect(
+      validateGraph(state().nodes, state().edges).some(
+        i => i.kind === 'deficit',
+      ),
+    ).toBe(true);
+
+    // run the producer twice -> supply 2, balanced
+    state().updateRecipe(a, { multiplier: 2 });
+    expect(validateGraph(state().nodes, state().edges)).toEqual([]);
+  });
+
+  it('scales sink remainder by the producer multiplier', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 5 });
+    state().updateRecipe(a, { multiplier: 2 }); // supply 10
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 4 });
+    const sink = addNode('outputNode');
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+    state().onConnect({
+      source: a,
+      target: sink,
+      sourceHandle: outId,
+      targetHandle: null,
+    });
+
+    // 10 produced - 4 consumed = 6 left for the sink
+    expect(leafData(sink).quantity).toBe(6);
+  });
+
+  it('scales an input-node leaf by the consumer multiplier', () => {
+    const input = addNode('inputNode');
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 3 });
+    state().updateRecipe(b, { multiplier: 2 });
+    state().onConnect({
+      source: input,
+      target: b,
+      sourceHandle: null,
+      targetHandle: inId,
+    });
+
+    expect(leafData(input).quantity).toBe(6);
+  });
+
+  it('re-syncs a connected sink when the multiplier changes', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 4 });
+    const sink = addNode('disposalNode');
+    state().onConnect({
+      source: a,
+      target: sink,
+      sourceHandle: outId,
+      targetHandle: null,
+    });
+    expect(leafData(sink).quantity).toBe(4);
+
+    state().updateRecipe(a, { multiplier: 3 });
+    expect(leafData(sink).quantity).toBe(12);
+  });
+});
+
+describe('layoutNodes', () => {
+  it('places a producer left of its consumer (left-to-right)', async () => {
+    vi.useRealTimers(); // ELK resolves on real timers, not the faked ones
+    const a = addNode('recipeNode', 500, 500);
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 1 });
+    const b = addNode('recipeNode', 0, 0);
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 1 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+
+    const laid = await layoutNodes(state().nodes, state().edges);
+
+    const pos = (id: string) => laid.find(n => n.id === id)!.position;
+    expect(pos(a).x).toBeLessThan(pos(b).x);
+  });
+});
+
 describe('deselectAll', () => {
   it('clears selection on nodes and edges', () => {
     const a = addNode('inputNode');
@@ -710,6 +825,16 @@ describe('copy / paste', () => {
     });
     // original gets deselected so only the paste stays selected
     expect(state().nodes[0]!.selected).toBe(false);
+  });
+
+  it('anchors the paste at the given cursor position', () => {
+    const id = addNode('inputNode', 100, 50);
+    select(id);
+    state().copySelection();
+    state().paste({ x: 400, y: 300 });
+
+    // single node -> its top-left lands exactly on the cursor
+    expect(state().nodes[1]!.position).toEqual({ x: 400, y: 300 });
   });
 
   it('rewires copied edges + recipe output handles to the new nodes', () => {

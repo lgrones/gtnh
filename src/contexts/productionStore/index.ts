@@ -3,7 +3,7 @@ import { useStore } from 'zustand';
 import { create } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 
-import { debounce, sameHistoryState } from './helpers';
+import { debounce, normalizeNodes, sameHistoryState } from './helpers';
 import { createClipboardSlice } from './slices/clipboard';
 import { createGraphSlice } from './slices/graph';
 import { createNodeDataSlice } from './slices/nodeData';
@@ -25,7 +25,7 @@ export type {
   VoltageTier,
 } from './types';
 export { DRAG_HANDLE_CLASS, VOLTAGE_TIERS } from './types';
-export { validateGraph, type GraphIssue } from './helpers';
+export { layoutNodes, validateGraph, type GraphIssue } from './helpers';
 
 // the live editing surface for the active graph. persistence lives in the
 // library store (useProductionLibrary) — this store is hydrated from / synced
@@ -42,7 +42,7 @@ export const useProductionStore = create<ProductionState>()(
         // debounced push fires *after* clear() and leaves a phantom undo entry
         const temporal = useProductionStore.temporal.getState();
         temporal.pause();
-        set({ nodes, edges });
+        set({ nodes: normalizeNodes(nodes), edges });
         temporal.resume();
         // drop history so undo can't reach the previous production line
         temporal.clear();
@@ -95,6 +95,7 @@ export const useProductionControls = () => {
       updateRecipe: state.updateRecipe,
       copySelection: state.copySelection,
       paste: state.paste,
+      setNodes: state.setNodes,
       deselectAll: state.deselectAll,
     })),
   );

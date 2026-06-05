@@ -1,4 +1,9 @@
-import { addEdge, applyEdgeChanges, applyNodeChanges } from '@xyflow/react';
+import {
+  addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
+  ConnectionLineType,
+} from '@xyflow/react';
 
 import {
   SINK_TYPES,
@@ -62,7 +67,12 @@ export const createGraphSlice: SliceCreator<GraphSlice> = (set, get) => ({
     );
 
     const edges = addEdge(
-      { ...connection, animated: true, markerEnd: { type: 'arrowclosed' } },
+      {
+        ...connection,
+        type: ConnectionLineType.SmoothStep,
+        animated: true,
+        markerEnd: { type: 'arrowclosed' },
+      },
       base,
     );
     set({ edges, nodes: syncMirrors(nodes, edges) });

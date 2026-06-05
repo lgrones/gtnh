@@ -92,9 +92,13 @@ export const createNodeDataSlice: SliceCreator<NodeDataSlice> = (set, get) => ({
     set({ nodes: syncMirrors(nodes, edges), edges });
   },
 
-  // scalar recipe fields (machine, power, voltage, amperage, steam) — no mirror
-  updateRecipe: (nodeId, patch) =>
-    set({
-      nodes: mapRecipe(get().nodes, nodeId, data => ({ ...data, ...patch })),
-    }),
+  // scalar recipe fields — `multiplier` scales effective I/O, so connected sink
+  // and input leaves must re-sync; the others are no-ops for mirrors but cheap
+  updateRecipe: (nodeId, patch) => {
+    const nodes = mapRecipe(get().nodes, nodeId, data => ({
+      ...data,
+      ...patch,
+    }));
+    set({ nodes: syncMirrors(nodes, get().edges) });
+  },
 });

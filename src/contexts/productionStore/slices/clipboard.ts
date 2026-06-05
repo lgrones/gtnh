@@ -35,9 +35,16 @@ export const createClipboardSlice: SliceCreator<ClipboardSlice> = (
     });
   },
 
-  paste: () => {
+  paste: position => {
     const clip = get().clipboard;
     if (!clip || clip.nodes.length === 0) return;
+
+    // anchor the paste at the selection's top-left so the cursor lands there;
+    // with no position, fall back to a fixed offset from the originals
+    const minX = Math.min(...clip.nodes.map(node => node.position.x));
+    const minY = Math.min(...clip.nodes.map(node => node.position.y));
+    const dx = position ? position.x - minX : PASTE_OFFSET;
+    const dy = position ? position.y - minY : PASTE_OFFSET;
 
     const idMap = new Map<string, string>(); // old node id -> new
     const handleMap = new Map<string, string>(); // old item id -> new handle
@@ -63,10 +70,7 @@ export const createClipboardSlice: SliceCreator<ClipboardSlice> = (
       return {
         ...node,
         id: newId,
-        position: {
-          x: node.position.x + PASTE_OFFSET,
-          y: node.position.y + PASTE_OFFSET,
-        },
+        position: { x: node.position.x + dx, y: node.position.y + dy },
         data,
         selected: true,
       } as ProductionNode;

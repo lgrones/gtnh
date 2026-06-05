@@ -69,6 +69,7 @@ export interface RecipeNodeData extends BaseNodeData {
   voltage: VoltageTier; // electric tier
   amperage: number; // electric amps
   steam: number; // steam L/t
+  multiplier: number; // parallel/batch run count — scales effective I/O
 }
 
 // node typed per variant so data matches the node `type`
@@ -106,7 +107,9 @@ export interface ProductionState {
   // copy/paste — clipboard holds clones of the last copied selection
   clipboard: Clipboard | null;
   copySelection: () => void;
-  paste: () => void;
+  // paste at the given flow position (anchored to the selection's top-left);
+  // falls back to a fixed offset from the originals when no position is given
+  paste: (position?: { x: number; y: number }) => void;
 
   // replace the whole graph and wipe undo/redo history
   // reset() => empty (new line), reset(nodes, edges) => load a saved line
@@ -135,7 +138,7 @@ export interface ProductionState {
     patch: Partial<
       Pick<
         RecipeNodeData,
-        'machine' | 'power' | 'voltage' | 'amperage' | 'steam'
+        'machine' | 'power' | 'voltage' | 'amperage' | 'steam' | 'multiplier'
       >
     >,
   ) => void;

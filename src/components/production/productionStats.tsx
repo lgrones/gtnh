@@ -33,6 +33,7 @@ export const ProductionStats = () => {
         color="indigo"
         leftSection={<IconChecklist size={16} />}
         onClick={() => setIssues(validateGraph(nodes, edges))}
+        style={{ flexShrink: 0 }}
       >
         Validate
       </Button>

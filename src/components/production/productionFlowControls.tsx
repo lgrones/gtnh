@@ -4,6 +4,7 @@ import { useReactFlow } from '@xyflow/react';
 import type { PropsWithChildren } from 'react';
 
 import {
+  layoutNodes,
   useProductionControls,
   useProductionStore,
   type ProductionNodeType,
@@ -28,7 +29,7 @@ export const ProductionFlowControls = ({
     onChange,
   });
 
-  const { screenToFlowPosition, getNodes, getEdges, deleteElements } =
+  const { screenToFlowPosition, getNodes, getEdges, deleteElements, fitView } =
     useReactFlow();
   const position = screenToFlowPosition(useMousePosition());
   const { canUndo, canRedo, undo, redo, ...actions } = useProductionControls();
@@ -45,6 +46,14 @@ export const ProductionFlowControls = ({
 
   const add = (type: ProductionNodeType) => actions.addNode(type, position);
 
+  // re-layout (ELK is async, so it lives here not in the store) then frame the
+  // result once React Flow has the new positions
+  const autoLayout = async () => {
+    const { nodes, edges } = useProductionStore.getState();
+    actions.setNodes(await layoutNodes(nodes, edges));
+    requestAnimationFrame(() => void fitView({ duration: 300 }));
+  };
+
   // remove every selected node + edge (scales to multi-select / box-select)
   const deleteSelected = () =>
     void deleteElements({
@@ -60,7 +69,8 @@ export const ProductionFlowControls = ({
     ['CTRL+Z', () => undo()],
     ['CTRL+Y', () => redo()],
     ['CTRL+C', () => actions.copySelection()],
-    ['CTRL+V', () => actions.paste()],
+    ['CTRL+V', () => actions.paste(position)],
+    ['CTRL+L', () => void autoLayout()],
   ]);
 
   // Escape: blur the active field + clear selection. empty ignore list + true
@@ -147,7 +157,7 @@ export const ProductionFlowControls = ({
         </Menu.Item>
 
         <Menu.Item
-          onClick={() => actions.paste()}
+          onClick={() => actions.paste(position)}
           disabled={!hasClipboard}
           rightSection={
             <Text size="xs" c="dimmed">
@@ -156,6 +166,17 @@ export const ProductionFlowControls = ({
           }
         >
           Paste
+        </Menu.Item>
+
+        <Menu.Item
+          onClick={() => void autoLayout()}
+          rightSection={
+            <Text size="xs" c="dimmed">
+              Ctrl+L
+            </Text>
+          }
+        >
+          Auto layout
         </Menu.Item>
 
         <Menu.Item
