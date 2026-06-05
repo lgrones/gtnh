@@ -14,15 +14,17 @@ export type {
   Clipboard,
   DisposalNodeData,
   InputNodeData,
-  MachineNodeData,
-  MachineOutput,
   OutputNodeData,
+  PowerType,
   ProductionNode,
   ProductionNodeType,
   ProductionState,
+  RecipeItem,
+  RecipeNodeData,
   SinkNodeData,
+  VoltageTier,
 } from './types';
-export { DRAG_HANDLE_CLASS } from './types';
+export { DRAG_HANDLE_CLASS, VOLTAGE_TIERS } from './types';
 
 // the live editing surface for the active graph. persistence lives in the
 // library store (useProductionLibrary) — this store is hydrated from / synced
@@ -74,9 +76,13 @@ export const useProductionControls = () => {
       removeNode: state.removeNode,
       reset: state.reset,
       renameNode: state.renameNode,
-      addMachineOutput: state.addMachineOutput,
-      updateMachineOutput: state.updateMachineOutput,
-      removeMachineOutput: state.removeMachineOutput,
+      addRecipeInput: state.addRecipeInput,
+      addRecipeOutput: state.addRecipeOutput,
+      updateRecipeInput: state.updateRecipeInput,
+      updateRecipeOutput: state.updateRecipeOutput,
+      removeRecipeInput: state.removeRecipeInput,
+      removeRecipeOutput: state.removeRecipeOutput,
+      updateRecipe: state.updateRecipe,
       copySelection: state.copySelection,
       paste: state.paste,
       deselectAll: state.deselectAll,

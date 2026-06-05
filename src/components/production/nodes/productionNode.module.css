@@ -1,8 +1,14 @@
 .node {
   border-radius: var(--mantine-radius-md);
-  padding: var(--mantine-spacing-xs);
+  padding: var(--mantine-spacing-sm);
 
-  &::before {
+  input,
+  :global(.mantine-SegmentedControl-root) {
+    background-color: black;
+    border: 1px solid var(--mantine-color-dark-7);
+  }
+
+  &[data-source]::before {
     content: '';
     position: absolute;
     top: 0;
@@ -12,13 +18,33 @@
     border-radius: var(--mantine-radius-md) 0 0 var(--mantine-radius-md);
     background-color: var(--node-color);
   }
+
+  &[data-target]::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 100%;
+    width: 3px;
+    border-radius: 0 var(--mantine-radius-md) var(--mantine-radius-md) 0;
+    background-color: var(--node-color);
+  }
+
+  &[data-none]::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    border-radius: 0 0 var(--mantine-radius-md) var(--mantine-radius-md);
+    background-color: var(--node-color);
+  }
 }
 
 .inputs {
   min-width: 0;
-  position: relative;
-  z-index: 1;
-  gap: 0;
+  gap: 4px;
 
   /* stylelint-disable-next-line selector-class-pattern */
   :global(.drag-handle_production) {
@@ -43,9 +69,12 @@
 }
 
 .target {
-  top: 50%;
-  pointer-events: none;
-  opacity: 0;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--node-color);
+  border: none;
 }
 
 /* stylelint-disable-next-line selector-class-pattern */
@@ -58,10 +87,55 @@
 }
 
 .output {
-  right: calc(var(--mantine-spacing-xs) * -1);
+  right: calc(var(--mantine-spacing-sm) * -1);
   width: 16px;
   height: 16px;
   border-radius: 50%;
   background: var(--node-color);
   border: none;
+}
+
+.recipe-input {
+  left: calc(var(--mantine-spacing-sm) * -1);
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--node-color);
+  border: none;
+}
+
+/*
+ * SegmentedControl's floating indicator sizes itself from getBoundingClientRect,
+ * which React Flow's viewport zoom scales — then it's re-scaled inside the
+ * viewport, so it renders wrong at any zoom != 1. Hide it and restore Mantine's
+ * static per-label background (which Mantine disables once the indicator inits).
+ */
+.sc-indicator {
+  display: none;
+}
+
+.sc-label {
+  > span {
+    font-weight: 500;
+  }
+
+  &[data-active]::before {
+    display: block !important;
+
+    --sc-color: var(--mantine-color-dark-7);
+  }
+}
+
+.gear {
+  animation: rotate 3s infinite linear;
+}
+
+@keyframes rotate {
+  0% {
+    transform: rotate(0);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
 }

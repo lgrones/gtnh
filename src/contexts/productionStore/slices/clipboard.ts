@@ -1,7 +1,8 @@
 import {
-  type MachineNodeData,
   type ProductionNode,
   type ProductionState,
+  type RecipeItem,
+  type RecipeNodeData,
   type SliceCreator,
 } from '../types';
 
@@ -39,22 +40,24 @@ export const createClipboardSlice: SliceCreator<ClipboardSlice> = (
     if (!clip || clip.nodes.length === 0) return;
 
     const idMap = new Map<string, string>(); // old node id -> new
-    const handleMap = new Map<string, string>(); // old output id -> new
+    const handleMap = new Map<string, string>(); // old item id -> new handle
 
     const nodes = clip.nodes.map(node => {
       const newId = crypto.randomUUID();
       idMap.set(node.id, newId);
       const data = structuredClone(node.data);
 
-      // machine output ids double as source handle ids — remap them so
-      // pasted edges still resolve to the pasted machine's outputs
-      if (node.type === 'machineNode') {
-        const machineData = data as MachineNodeData;
-        machineData.outputs = machineData.outputs.map(output => {
-          const outId = crypto.randomUUID();
-          handleMap.set(output.id, outId);
-          return { ...output, id: outId };
-        });
+      // recipe item ids double as handle ids (inputs = target, outputs =
+      // source) — remap both so pasted edges still resolve to the new node
+      if (node.type === 'recipeNode') {
+        const recipeData = data as RecipeNodeData;
+        const remap = (item: RecipeItem) => {
+          const id = crypto.randomUUID();
+          handleMap.set(item.id, id);
+          return { ...item, id };
+        };
+        recipeData.inputs = recipeData.inputs.map(remap);
+        recipeData.outputs = recipeData.outputs.map(remap);
       }
 
       return {
@@ -77,6 +80,9 @@ export const createClipboardSlice: SliceCreator<ClipboardSlice> = (
       sourceHandle: edge.sourceHandle
         ? (handleMap.get(edge.sourceHandle) ?? edge.sourceHandle)
         : edge.sourceHandle,
+      targetHandle: edge.targetHandle
+        ? (handleMap.get(edge.targetHandle) ?? edge.targetHandle)
+        : edge.targetHandle,
       selected: true,
     }));
 

@@ -2,12 +2,12 @@ import type { NodeTypes } from '@xyflow/react';
 
 import { DisposalNode } from './disposalNode';
 import { InputNode } from './inputNode';
-import { MachineNode } from './machineNode';
 import { OutputNode } from './outputNode';
+import { RecipeNode } from './recipeNode';
 
 export const nodeTypes = {
   inputNode: InputNode,
   outputNode: OutputNode,
-  machineNode: MachineNode,
+  recipeNode: RecipeNode,
   disposalNode: DisposalNode,
 } satisfies NodeTypes;

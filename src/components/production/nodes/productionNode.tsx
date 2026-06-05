@@ -14,7 +14,7 @@ import classes from './productionNode.module.css';
 
 interface ProductionNodeProps extends NodeProps<Omit<IProductionNode, 'type'>> {
   color: MantineColor;
-  type: 'source' | 'target';
+  type: 'source' | 'target' | 'none';
   // false for sink nodes whose name is driven by the connected output
   editable?: boolean;
   children?: React.ReactNode;
@@ -68,6 +68,7 @@ export const ProductionNode = ({
       <Paper
         className={classes.node}
         style={{ '--node-color': `var(--mantine-color-${color}-filled)` }}
+        mod={[type]}
       >
         <Group className={classes.inputs}>
           <IconGripVertical size={20} className={DRAG_HANDLE_CLASS} />
@@ -79,7 +80,7 @@ export const ProductionNode = ({
             contentEditable={editable}
             onBlur={
               editable
-                ? e => renameNode(id, e.currentTarget.textContent ?? '')
+                ? e => renameNode(id, e.currentTarget.textContent)
                 : undefined
             }
             className={classes.input}
@@ -90,6 +91,7 @@ export const ProductionNode = ({
 
           {rightSection}
         </Group>
+
         {children}
       </Paper>
 
@@ -98,6 +100,11 @@ export const ProductionNode = ({
           type="target"
           position={Position.Left}
           className={classes.target}
+          style={
+            {
+              '--node-color': `var(--mantine-color-${color}-filled)`,
+            } as React.CSSProperties
+          }
         />
       )}
 

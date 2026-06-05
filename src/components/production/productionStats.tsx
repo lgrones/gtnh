@@ -19,7 +19,13 @@ export const ProductionStats = () => {
   return (
     <Paper h="100%" p="md" component={Stack} style={{ overflow: 'auto' }}>
       <Items label="Inputs" nodes={nodes} type="inputNode" color="teal" />
-      <Items label="Machines" nodes={nodes} type="machineNode" color="indigo" />
+      <Items
+        label="Machines"
+        nodes={nodes}
+        type="recipeNode"
+        color="indigo"
+        groupBy={node => (node.type === 'recipeNode' ? node.data.machine : '')}
+      />
       <Items
         label="Disposals"
         nodes={nodes}
@@ -36,12 +42,19 @@ interface ItemsProps {
   type: ProductionNodeType;
   label: string;
   color: MantineColor;
+  groupBy?: (node: ProductionNode) => string;
 }
 
-const Items = ({ nodes, type, label, color }: ItemsProps) => {
+const Items = ({
+  nodes,
+  type,
+  label,
+  color,
+  groupBy = node => node.data.name,
+}: ItemsProps) => {
   const items = Object.groupBy(
     nodes.filter(x => x.type === type),
-    x => x.data.name,
+    groupBy,
   );
 
   return (
@@ -55,7 +68,13 @@ const Items = ({ nodes, type, label, color }: ItemsProps) => {
           <Box w={12} h={12} bg={color} style={{ borderRadius: '50%' }} />
 
           <Text>
-            {nodes?.length} {name}
+            {nodes?.reduce(
+              (acc, curr) =>
+                acc +
+                ('quantity' in curr.data ? (curr.data.quantity as number) : 1),
+              0,
+            )}{' '}
+            {name}
           </Text>
         </Group>
       ))}

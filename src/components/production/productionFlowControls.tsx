@@ -47,7 +47,7 @@ export const ProductionFlowControls = ({
 
   // remove every selected node + edge (scales to multi-select / box-select)
   const deleteSelected = () =>
-    deleteElements({
+    void deleteElements({
       nodes: getNodes().filter(node => node.selected),
       edges: getEdges().filter(edge => edge.selected),
     });
@@ -55,7 +55,7 @@ export const ProductionFlowControls = ({
   useHotkeys([
     ['CTRL+I', () => add('inputNode')],
     ['CTRL+O', () => add('outputNode')],
-    ['CTRL+M', () => add('machineNode')],
+    ['CTRL+R', () => add('recipeNode')],
     ['CTRL+D', () => add('disposalNode')],
     ['CTRL+Z', () => undo()],
     ['CTRL+Y', () => redo()],
@@ -109,14 +109,14 @@ export const ProductionFlowControls = ({
         </Menu.Item>
 
         <Menu.Item
-          onClick={() => add('machineNode')}
+          onClick={() => add('recipeNode')}
           rightSection={
             <Text size="xs" c="dimmed">
-              Ctrl+M
+              Ctrl+R
             </Text>
           }
         >
-          Machine
+          Recipe
         </Menu.Item>
 
         <Menu.Item

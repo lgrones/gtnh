@@ -18,6 +18,7 @@ const App = () => {
         defaultColorScheme="dark"
         theme={{
           defaultRadius: 'lg',
+          primaryColor: 'indigo',
           components: {
             Paper: Paper.extend({
               defaultProps: { bg: 'dark.9', withBorder: true },

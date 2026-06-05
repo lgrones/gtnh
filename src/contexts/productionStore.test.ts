@@ -3,8 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   useProductionStore,
-  type InputNodeData,
-  type MachineNodeData,
+  type RecipeNodeData,
   type SinkNodeData,
   type ProductionNode,
   type ProductionNodeType,
@@ -22,6 +21,23 @@ const addNode = (type: ProductionNodeType, x = 0, y = 0) => {
   state().addNode(type, { x, y });
   const nodes = state().nodes;
   return nodes[nodes.length - 1]!.id;
+};
+
+const recipeData = (id: string) =>
+  state().nodes.find(n => n.id === id)!.data as RecipeNodeData;
+
+// add a recipe output, returning its generated id
+const addOutput = (recipe: string) => {
+  state().addRecipeOutput(recipe);
+  const outputs = recipeData(recipe).outputs;
+  return outputs[outputs.length - 1]!.id;
+};
+
+// add a recipe input, returning its generated id
+const addInput = (recipe: string) => {
+  state().addRecipeInput(recipe);
+  const inputs = recipeData(recipe).inputs;
+  return inputs[inputs.length - 1]!.id;
 };
 
 beforeEach(() => {
@@ -46,11 +62,18 @@ describe('addNode', () => {
     expect(node.data.name).toBe('Input');
   });
 
-  it('appends a machine node with an empty outputs list', () => {
-    const id = addNode('machineNode');
-    const node = state().nodes.find(n => n.id === id)!;
-    expect(node.type).toBe('machineNode');
-    expect((node.data as MachineNodeData).outputs).toEqual([]);
+  it('appends a recipe node with empty item lists and energy defaults', () => {
+    const id = addNode('recipeNode');
+    const data = recipeData(id);
+    expect(data.inputs).toEqual([]);
+    expect(data.outputs).toEqual([]);
+    expect(data).toMatchObject({
+      machine: '',
+      power: 'electric',
+      voltage: 'LV',
+      amperage: 1,
+      steam: 0,
+    });
   });
 
   it('gives each node a unique id', () => {
@@ -63,8 +86,8 @@ describe('addNode', () => {
 
 describe('removeNode', () => {
   it('removes the node and any connected edges', () => {
-    const a = addNode('machineNode');
-    const b = addNode('machineNode');
+    const a = addNode('recipeNode');
+    const b = addNode('recipeNode');
     store.setState({ edges: [{ id: 'e1', source: a, target: b }] as Edge[] });
 
     state().removeNode(a);
@@ -76,72 +99,101 @@ describe('removeNode', () => {
 
 describe('renameNode', () => {
   it('updates the node name', () => {
-    const id = addNode('inputNode');
-    state().renameNode(id, 'Iron Ore');
-    expect(state().nodes[0]!.data.name).toBe('Iron Ore');
+    const id = addNode('recipeNode');
+    state().renameNode(id, 'Macerator');
+    expect(state().nodes[0]!.data.name).toBe('Macerator');
   });
 
   it('leaves other nodes untouched', () => {
-    const a = addNode('inputNode');
+    const a = addNode('recipeNode');
     const b = addNode('outputNode');
     state().renameNode(a, 'Renamed');
     expect(state().nodes.find(n => n.id === b)!.data.name).toBe('Output');
   });
 });
 
-describe('setInputQuantity', () => {
-  it('updates an input node quantity', () => {
-    const id = addNode('inputNode');
-    state().setInputQuantity(id, 7);
-    expect((state().nodes[0]!.data as InputNodeData).quantity).toBe(7);
+describe('updateRecipe', () => {
+  it('patches scalar recipe fields', () => {
+    const id = addNode('recipeNode');
+    state().updateRecipe(id, { machine: 'EBF', power: 'steam', steam: 320 });
+    expect(recipeData(id)).toMatchObject({
+      machine: 'EBF',
+      power: 'steam',
+      steam: 320,
+    });
   });
 
-  it('is a no-op on a non-input node', () => {
-    const id = addNode('outputNode');
-    state().setInputQuantity(id, 7);
-    expect((state().nodes[0]!.data as SinkNodeData).quantity).toBe(0);
+  it('is a no-op on a non-recipe node', () => {
+    const id = addNode('inputNode');
+    state().updateRecipe(id, { machine: 'EBF' });
+    expect('machine' in state().nodes[0]!.data).toBe(false);
   });
 });
 
-describe('machine outputs', () => {
+describe('recipe outputs', () => {
   it('adds an output with sensible defaults', () => {
-    const id = addNode('machineNode');
-    state().addMachineOutput(id);
-    const data = state().nodes[0]!.data as MachineNodeData;
-    expect(data.outputs).toHaveLength(1);
-    expect(data.outputs[0]).toMatchObject({ name: '', quantity: 1 });
+    const id = addNode('recipeNode');
+    state().addRecipeOutput(id);
+    expect(recipeData(id).outputs).toHaveLength(1);
+    expect(recipeData(id).outputs[0]).toMatchObject({ name: '', quantity: 1 });
   });
 
   it('updates an existing output', () => {
-    const id = addNode('machineNode');
-    state().addMachineOutput(id);
-    const outputId = (state().nodes[0]!.data as MachineNodeData).outputs[0]!.id;
-    state().updateMachineOutput(id, outputId, { name: 'Slag', quantity: 4 });
-    const output = (state().nodes[0]!.data as MachineNodeData).outputs[0]!;
-    expect(output).toMatchObject({ name: 'Slag', quantity: 4 });
+    const id = addNode('recipeNode');
+    const outputId = addOutput(id);
+    state().updateRecipeOutput(id, outputId, { name: 'Slag', quantity: 4 });
+    expect(recipeData(id).outputs[0]).toMatchObject({
+      name: 'Slag',
+      quantity: 4,
+    });
   });
 
   it('removes an output', () => {
-    const id = addNode('machineNode');
-    state().addMachineOutput(id);
-    const outputId = (state().nodes[0]!.data as MachineNodeData).outputs[0]!.id;
-    state().removeMachineOutput(id, outputId);
-    expect((state().nodes[0]!.data as MachineNodeData).outputs).toHaveLength(0);
+    const id = addNode('recipeNode');
+    const outputId = addOutput(id);
+    state().removeRecipeOutput(id, outputId);
+    expect(recipeData(id).outputs).toHaveLength(0);
   });
 
-  it('is a no-op on a non-machine node', () => {
+  it('is a no-op on a non-recipe node', () => {
     const id = addNode('inputNode');
-    state().addMachineOutput(id);
+    state().addRecipeOutput(id);
     const node = state().nodes[0]!;
     expect(node.type).toBe('inputNode');
     expect('outputs' in node.data).toBe(false);
   });
 });
 
+describe('recipe inputs', () => {
+  it('adds an input with sensible defaults', () => {
+    const id = addNode('recipeNode');
+    state().addRecipeInput(id);
+    expect(recipeData(id).inputs).toHaveLength(1);
+    expect(recipeData(id).inputs[0]).toMatchObject({ name: '', quantity: 1 });
+  });
+
+  it('updates an existing input', () => {
+    const id = addNode('recipeNode');
+    const inputId = addInput(id);
+    state().updateRecipeInput(id, inputId, { name: 'Iron Ore', quantity: 2 });
+    expect(recipeData(id).inputs[0]).toMatchObject({
+      name: 'Iron Ore',
+      quantity: 2,
+    });
+  });
+
+  it('removes an input', () => {
+    const id = addNode('recipeNode');
+    const inputId = addInput(id);
+    state().removeRecipeInput(id, inputId);
+    expect(recipeData(id).inputs).toHaveLength(0);
+  });
+});
+
 describe('onConnect', () => {
   it('adds an animated edge', () => {
-    const a = addNode('machineNode');
-    const b = addNode('machineNode');
+    const a = addNode('recipeNode');
+    const b = addNode('recipeNode');
     state().onConnect({
       source: a,
       target: b,
@@ -153,26 +205,23 @@ describe('onConnect', () => {
   });
 });
 
-describe('sink sync', () => {
-  // wire a machine output handle to a sink node, return [machineId, outputId, sinkId]
+describe('mirror sync — recipe output -> sink', () => {
+  // wire a recipe output handle to a sink node
   const wire = (sinkType: ProductionNodeType) => {
-    const machine = addNode('machineNode');
-    state().addMachineOutput(machine);
-    const outputId = (
-      state().nodes.find(n => n.id === machine)!.data as MachineNodeData
-    ).outputs[0]!.id;
-    state().updateMachineOutput(machine, outputId, {
+    const recipe = addNode('recipeNode');
+    const outputId = addOutput(recipe);
+    state().updateRecipeOutput(recipe, outputId, {
       name: 'Iron Plate',
       quantity: 4,
     });
     const sink = addNode(sinkType);
     state().onConnect({
-      source: machine,
+      source: recipe,
       target: sink,
       sourceHandle: outputId,
       targetHandle: null,
     });
-    return { machine, outputId, sink };
+    return { recipe, outputId, sink };
   };
 
   it('mirrors name + quantity onto an output node on connect', () => {
@@ -188,37 +237,33 @@ describe('sink sync', () => {
   });
 
   it('propagates a later quantity edit to the connected sink', () => {
-    const { machine, outputId, sink } = wire('outputNode');
-    state().updateMachineOutput(machine, outputId, { quantity: 9 });
+    const { recipe, outputId, sink } = wire('outputNode');
+    state().updateRecipeOutput(recipe, outputId, { quantity: 9 });
     const data = state().nodes.find(n => n.id === sink)!.data as SinkNodeData;
     expect(data.quantity).toBe(9);
   });
 
   it('drops the dangling edge when the source output is removed', () => {
-    const { machine, outputId } = wire('outputNode');
-    state().removeMachineOutput(machine, outputId);
+    const { recipe, outputId } = wire('outputNode');
+    state().removeRecipeOutput(recipe, outputId);
     expect(state().edges).toHaveLength(0);
   });
 
   it('lets a sink hold only one input — a new connection replaces the old', () => {
-    const m1 = addNode('machineNode');
-    state().addMachineOutput(m1);
-    const o1 = (state().nodes.find(n => n.id === m1)!.data as MachineNodeData)
-      .outputs[0]!.id;
-    const m2 = addNode('machineNode');
-    state().addMachineOutput(m2);
-    const o2 = (state().nodes.find(n => n.id === m2)!.data as MachineNodeData)
-      .outputs[0]!.id;
+    const r1 = addNode('recipeNode');
+    const o1 = addOutput(r1);
+    const r2 = addNode('recipeNode');
+    const o2 = addOutput(r2);
     const sink = addNode('outputNode');
 
     state().onConnect({
-      source: m1,
+      source: r1,
       target: sink,
       sourceHandle: o1,
       targetHandle: null,
     });
     state().onConnect({
-      source: m2,
+      source: r2,
       target: sink,
       sourceHandle: o2,
       targetHandle: null,
@@ -226,24 +271,110 @@ describe('sink sync', () => {
 
     const incoming = state().edges.filter(e => e.target === sink);
     expect(incoming).toHaveLength(1);
-    expect(incoming[0]!.source).toBe(m2);
+    expect(incoming[0]!.source).toBe(r2);
   });
 
   it('mirrors an unnamed output as-is (empty name, quantity 1)', () => {
-    const machine = addNode('machineNode');
-    state().addMachineOutput(machine);
-    const outputId = (
-      state().nodes.find(n => n.id === machine)!.data as MachineNodeData
-    ).outputs[0]!.id;
+    const recipe = addNode('recipeNode');
+    const outputId = addOutput(recipe);
     const sink = addNode('outputNode');
     state().onConnect({
-      source: machine,
+      source: recipe,
       target: sink,
       sourceHandle: outputId,
       targetHandle: null,
     });
     const data = state().nodes.find(n => n.id === sink)!.data as SinkNodeData;
     expect(data).toMatchObject({ name: '', quantity: 1 });
+  });
+});
+
+describe('mirror sync — input node -> recipe input', () => {
+  // wire an input leaf to a recipe input handle (reverse direction)
+  const wire = () => {
+    const recipe = addNode('recipeNode');
+    const inputId = addInput(recipe);
+    state().updateRecipeInput(recipe, inputId, {
+      name: 'Iron Ore',
+      quantity: 3,
+    });
+    const input = addNode('inputNode');
+    state().onConnect({
+      source: input,
+      target: recipe,
+      sourceHandle: null,
+      targetHandle: inputId,
+    });
+    return { recipe, inputId, input };
+  };
+
+  it('mirrors name + quantity onto the input node on connect', () => {
+    const { input } = wire();
+    const data = state().nodes.find(n => n.id === input)!.data as SinkNodeData;
+    expect(data).toMatchObject({ name: 'Iron Ore', quantity: 3 });
+  });
+
+  it('propagates a later input edit to the connected input node', () => {
+    const { recipe, inputId, input } = wire();
+    state().updateRecipeInput(recipe, inputId, { quantity: 8 });
+    const data = state().nodes.find(n => n.id === input)!.data as SinkNodeData;
+    expect(data.quantity).toBe(8);
+  });
+
+  it('drops the dangling edge when the recipe input is removed', () => {
+    const { recipe, inputId } = wire();
+    state().removeRecipeInput(recipe, inputId);
+    expect(state().edges).toHaveLength(0);
+  });
+
+  it('lets an input leaf feed only one recipe input — new connection replaces', () => {
+    const input = addNode('inputNode');
+    const r1 = addNode('recipeNode');
+    const i1 = addInput(r1);
+    const r2 = addNode('recipeNode');
+    const i2 = addInput(r2);
+
+    state().onConnect({
+      source: input,
+      target: r1,
+      sourceHandle: null,
+      targetHandle: i1,
+    });
+    state().onConnect({
+      source: input,
+      target: r2,
+      sourceHandle: null,
+      targetHandle: i2,
+    });
+
+    const outgoing = state().edges.filter(e => e.source === input);
+    expect(outgoing).toHaveLength(1);
+    expect(outgoing[0]!.target).toBe(r2);
+  });
+});
+
+describe('mirror sync — recipe -> recipe', () => {
+  it('leaves both recipes untouched on a direct chain', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 2 });
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 1 });
+
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+
+    expect(recipeData(a).outputs[0]).toMatchObject({
+      name: 'Ore',
+      quantity: 2,
+    });
+    expect(recipeData(b).inputs[0]).toMatchObject({ name: 'Ore', quantity: 1 });
+    expect(state().edges).toHaveLength(1);
   });
 });
 
@@ -294,20 +425,17 @@ describe('copy / paste', () => {
     expect(state().nodes[0]!.selected).toBe(false);
   });
 
-  it('rewires copied edges + machine output handles to the new nodes', () => {
-    const machine = addNode('machineNode');
-    state().addMachineOutput(machine);
-    const outputId = (
-      state().nodes.find(n => n.id === machine)!.data as MachineNodeData
-    ).outputs[0]!.id;
+  it('rewires copied edges + recipe output handles to the new nodes', () => {
+    const recipe = addNode('recipeNode');
+    const outputId = addOutput(recipe);
     const sink = addNode('outputNode');
     state().onConnect({
-      source: machine,
+      source: recipe,
       target: sink,
       sourceHandle: outputId,
       targetHandle: null,
     });
-    select(machine);
+    select(recipe);
     select(sink);
     state().copySelection();
     state().paste();
@@ -316,36 +444,64 @@ describe('copy / paste', () => {
     expect(state().nodes).toHaveLength(4);
     expect(state().edges).toHaveLength(2);
 
-    const pastedMachine = state().nodes.find(
-      n => n.id !== machine && n.type === 'machineNode',
+    const pastedRecipe = state().nodes.find(
+      n => n.id !== recipe && n.type === 'recipeNode',
     )!;
     const pastedSink = state().nodes.find(
       n => n.id !== sink && n.type === 'outputNode',
     )!;
-    const pastedOutputId = (pastedMachine.data as MachineNodeData).outputs[0]!
-      .id;
-    const pastedEdge = state().edges.find(e => e.source === pastedMachine.id)!;
+    const pastedOutputId = (pastedRecipe.data as RecipeNodeData).outputs[0]!.id;
+    const pastedEdge = state().edges.find(e => e.source === pastedRecipe.id)!;
 
     expect(pastedEdge.target).toBe(pastedSink.id);
     expect(pastedEdge.sourceHandle).toBe(pastedOutputId);
     expect(pastedOutputId).not.toBe(outputId);
   });
 
+  it('rewires copied input-node edges + recipe input handles', () => {
+    const input = addNode('inputNode');
+    const recipe = addNode('recipeNode');
+    const inputId = addInput(recipe);
+    state().onConnect({
+      source: input,
+      target: recipe,
+      sourceHandle: null,
+      targetHandle: inputId,
+    });
+    select(input);
+    select(recipe);
+    state().copySelection();
+    state().paste();
+
+    expect(state().nodes).toHaveLength(4);
+    expect(state().edges).toHaveLength(2);
+
+    const pastedInput = state().nodes.find(
+      n => n.id !== input && n.type === 'inputNode',
+    )!;
+    const pastedRecipe = state().nodes.find(
+      n => n.id !== recipe && n.type === 'recipeNode',
+    )!;
+    const pastedInputId = (pastedRecipe.data as RecipeNodeData).inputs[0]!.id;
+    const pastedEdge = state().edges.find(e => e.source === pastedInput.id)!;
+
+    expect(pastedEdge.target).toBe(pastedRecipe.id);
+    expect(pastedEdge.targetHandle).toBe(pastedInputId);
+    expect(pastedInputId).not.toBe(inputId);
+  });
+
   it('excludes edges that leave the copied selection', () => {
-    const machine = addNode('machineNode');
-    state().addMachineOutput(machine);
-    const outputId = (
-      state().nodes.find(n => n.id === machine)!.data as MachineNodeData
-    ).outputs[0]!.id;
+    const recipe = addNode('recipeNode');
+    const outputId = addOutput(recipe);
     const sink = addNode('outputNode');
     state().onConnect({
-      source: machine,
+      source: recipe,
       target: sink,
       sourceHandle: outputId,
       targetHandle: null,
     });
-    // copy only the machine — the edge to the sink must not come along
-    select(machine);
+    // copy only the recipe — the edge to the sink must not come along
+    select(recipe);
     state().copySelection();
     state().paste();
 
@@ -373,7 +529,7 @@ describe('delete via change handlers', () => {
 
 describe('reset', () => {
   it('clears the graph and history when called with no args', () => {
-    addNode('machineNode');
+    addNode('recipeNode');
     flushHistory();
     expect(history().pastStates.length).toBeGreaterThan(0);
 
@@ -385,7 +541,7 @@ describe('reset', () => {
   });
 
   it('loads a saved graph and wipes history', () => {
-    addNode('machineNode');
+    addNode('recipeNode');
     flushHistory();
 
     const nodes: ProductionNode[] = [
@@ -406,7 +562,7 @@ describe('reset', () => {
 
 describe('undo / redo', () => {
   it('undoes and redoes a node add', () => {
-    addNode('machineNode');
+    addNode('recipeNode');
     flushHistory();
     expect(state().nodes).toHaveLength(1);
 
@@ -420,8 +576,8 @@ describe('undo / redo', () => {
   it('groups a burst of sets into one undo step', () => {
     // two adds within the debounce window => single history entry,
     // snapshotting the state from before the burst
-    addNode('machineNode');
-    addNode('machineNode');
+    addNode('recipeNode');
+    addNode('recipeNode');
     flushHistory();
     expect(state().nodes).toHaveLength(2);
     expect(history().pastStates).toHaveLength(1);

@@ -5,7 +5,7 @@ import { type ProductionNode as IProductionNode } from '@/contexts/productionSto
 
 import { ProductionNode } from './productionNode';
 
-type DisposalNodeType = Extract<IProductionNode, { type: 'outputNode' }>;
+type DisposalNodeType = Extract<IProductionNode, { type: 'disposalNode' }>;
 
 export const DisposalNode = (props: NodeProps<DisposalNodeType>) => (
   <ProductionNode

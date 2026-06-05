@@ -1,6 +1,6 @@
 import { addEdge, applyEdgeChanges, applyNodeChanges } from '@xyflow/react';
 
-import { SINK_TYPES, createNode, syncSinks } from '../helpers';
+import { SINK_TYPES, createNode, syncMirrors } from '../helpers';
 import { type ProductionState, type SliceCreator } from '../types';
 
 type GraphSlice = Pick<
@@ -24,29 +24,38 @@ export const createGraphSlice: SliceCreator<GraphSlice> = (set, get) => ({
 
   onNodesChange: changes => {
     const nodes = applyNodeChanges(changes, get().nodes);
-    // a removed node may orphan a sink — keep sink labels in sync
+    // a removed node may orphan a mirror leaf — keep leaf labels in sync
     const removed = changes.some(change => change.type === 'remove');
-    set(removed ? { nodes: syncSinks(nodes, get().edges) } : { nodes });
+    set(removed ? { nodes: syncMirrors(nodes, get().edges) } : { nodes });
   },
   onEdgesChange: changes => {
     const edges = applyEdgeChanges(changes, get().edges);
     const removed = changes.some(change => change.type === 'remove');
-    set(removed ? { edges, nodes: syncSinks(get().nodes, edges) } : { edges });
+    set(
+      removed ? { edges, nodes: syncMirrors(get().nodes, edges) } : { edges },
+    );
   },
   onConnect: connection => {
-    // sinks accept a single input — a new connection replaces the old one
-    const targetIsSink = get().nodes.some(
+    const nodes = get().nodes;
+    // sinks mirror a single recipe output — replace any existing incoming edge
+    const targetIsSink = nodes.some(
       node => node.id === connection.target && SINK_TYPES.has(node.type),
     );
-    const base = targetIsSink
-      ? get().edges.filter(edge => edge.target !== connection.target)
-      : get().edges;
+    // an input leaf mirrors a single recipe input — replace its outgoing edge
+    const sourceIsInput = nodes.some(
+      node => node.id === connection.source && node.type === 'inputNode',
+    );
+    const base = get().edges.filter(
+      edge =>
+        !(targetIsSink && edge.target === connection.target) &&
+        !(sourceIsInput && edge.source === connection.source),
+    );
 
     const edges = addEdge(
       { ...connection, animated: true, markerEnd: { type: 'arrowclosed' } },
       base,
     );
-    set({ edges, nodes: syncSinks(get().nodes, edges) });
+    set({ edges, nodes: syncMirrors(nodes, edges) });
   },
 
   addNode: (type, position) =>
@@ -57,7 +66,7 @@ export const createGraphSlice: SliceCreator<GraphSlice> = (set, get) => ({
     const edges = get().edges.filter(
       edge => edge.source !== id && edge.target !== id,
     );
-    set({ nodes: syncSinks(nodes, edges), edges });
+    set({ nodes: syncMirrors(nodes, edges), edges });
   },
 
   setNodes: nodes => set({ nodes }),
