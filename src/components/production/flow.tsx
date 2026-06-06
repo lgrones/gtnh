@@ -29,7 +29,6 @@ import { useShallow } from 'zustand/react/shallow';
 import { useCollab } from '@/contexts/collab/session';
 import {
   useActiveGraph,
-  useActiveRole,
   useProductionLibrary,
 } from '@/contexts/productionLibrary';
 import {
@@ -71,11 +70,9 @@ export const Flow = () => {
 };
 
 // the canvas body — lives inside ReactFlowProvider so it can project cursor
-// coordinates and read role/collab state for the active graph
+// coordinates and read collab state for the active graph
 const FlowCanvas = ({ name }: { name: string }) => {
   const flowProps = useProductionFlow();
-  const role = useActiveRole();
-  const canEdit = role === 'owner' || role === 'editor';
   const hasNodes = useProductionStore(state => state.nodes.length > 0);
 
   const { status, save, setCursor } = useCollab(
@@ -105,10 +102,10 @@ const FlowCanvas = ({ name }: { name: string }) => {
         {...flowProps}
         nodeTypes={nodeTypes}
         connectionRadius={60}
-        deleteKeyCode={canEdit ? ['Delete', 'Backspace'] : []}
-        nodesDraggable={canEdit}
-        nodesConnectable={canEdit}
-        edgesReconnectable={canEdit}
+        deleteKeyCode={['Delete', 'Backspace']}
+        nodesDraggable
+        nodesConnectable
+        edgesReconnectable
         onPaneClick={closeMenu}
         onMoveStart={closeMenu}
         onMouseMove={onMouseMove}
@@ -133,31 +130,24 @@ const FlowCanvas = ({ name }: { name: string }) => {
           <Group gap="xs">
             <Text>{name}</Text>
             {status === 'loading' && <Loader size="xs" />}
-            {role === 'viewer' && (
-              <Text size="xs" c="dimmed">
-                (read only)
-              </Text>
-            )}
           </Group>
         </Panel>
 
-        {canEdit && (
-          <Panel position="top-right">
-            <Button
-              size="xs"
-              variant="default"
-              leftSection={<IconDeviceFloppy size={14} />}
-              onClick={() => void save()}
-            >
-              Save
-            </Button>
-          </Panel>
-        )}
+        <Panel position="top-right">
+          <Button
+            size="xs"
+            variant="default"
+            leftSection={<IconDeviceFloppy size={14} />}
+            onClick={() => void save()}
+          >
+            Save
+          </Button>
+        </Panel>
 
-        {!hasNodes && canEdit && (
+        {!hasNodes && (
           <Panel position="center-left" style={{ width: '100%' }}>
             <Text ta="center">
-              Starting placing Nodes with right-clicking or using shortcuts
+              Start placing nodes by right-clicking or using shortcuts
             </Text>
           </Panel>
         )}
@@ -165,11 +155,9 @@ const FlowCanvas = ({ name }: { name: string }) => {
     </Paper>
   );
 
-  return canEdit ? (
+  return (
     <Controls opened={menuOpened} onChange={setMenuOpened}>
       {canvas}
     </Controls>
-  ) : (
-    canvas
   );
 };

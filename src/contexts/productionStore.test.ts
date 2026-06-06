@@ -43,7 +43,7 @@ const addInput = (recipe: string) => {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  store.setState({ nodes: [], edges: [] });
+  store.setState({ nodes: [], edges: [], generator: null });
   vi.runAllTimers();
 });
 
@@ -1129,5 +1129,31 @@ describe('reset', () => {
     state().reset(nodes, edges);
 
     expect(state().nodes).toEqual(nodes);
+  });
+
+  it('clears the generator selection', () => {
+    state().setGenerator({ categoryId: 'diesel', fuelName: 'Diesel' });
+
+    state().reset();
+
+    expect(state().generator).toBeNull();
+  });
+});
+
+describe('setGenerator', () => {
+  it('stores the per-graph generator selection', () => {
+    state().setGenerator({ categoryId: 'diesel', fuelName: 'Diesel' });
+
+    expect(state().generator).toEqual({
+      categoryId: 'diesel',
+      fuelName: 'Diesel',
+    });
+  });
+
+  it('overwrites a previous selection', () => {
+    state().setGenerator({ categoryId: 'diesel', fuelName: null });
+    state().setGenerator({ categoryId: 'gas', fuelName: 'Methane' });
+
+    expect(state().generator).toEqual({ categoryId: 'gas', fuelName: 'Methane' });
   });
 });

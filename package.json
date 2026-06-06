@@ -5,7 +5,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "emulators": "firebase emulators:start",
+    "emulators": "firebase emulators:start --import=./emulator-data --export-on-exit",
     "firebase:deploy": "pnpm build && firebase deploy",
     "validate": "concurrently \"pnpm lint\" \"pnpm lint:styles\" \"pnpm format:check\" \"pnpm types:check\" -p name -n \"Lint,Styles,Format,TS\" -c \"magenta,cyan,yellow,blue\"",
     "lint": "oxlint && eslint",

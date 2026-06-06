@@ -11,6 +11,7 @@ export type {
   BaseNodeData,
   Clipboard,
   DisposalNodeData,
+  GeneratorSelection,
   InputNodeData,
   OutputNodeData,
   ProductionNode,
@@ -43,8 +44,11 @@ export const useProductionStore = create<ProductionState>()((set, get) => ({
   ...createNodeDataSlice(set, get),
   ...createClipboardSlice(set, get),
 
+  generator: null,
+  setGenerator: selection => set({ generator: selection }),
+
   reset: (nodes = [], edges = []) =>
-    set({ nodes: normalizeNodes(nodes), edges }),
+    set({ nodes: normalizeNodes(nodes), edges, generator: null }),
 }));
 
 // all props React Flow needs — spread onto <ReactFlow {...useProductionFlow()} />

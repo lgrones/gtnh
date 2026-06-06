@@ -2,58 +2,16 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // graphs: durable per-graph snapshot + sharing metadata. The live editing
-    // delta stream lives in Realtime Database; this is the source of truth for
-    // membership and the compacted Yjs snapshot.
+    // graphs: durable per-graph compacted Yjs snapshot. The live editing delta
+    // stream lives in Realtime Database. All graphs are shared between every
+    // user, so any signed-in user has full access. Account creation is disabled
+    // in the console, so the signed-in set is exactly the people added by hand.
     match /graphs/{graphId} {
       function isSignedIn() {
         return request.auth != null;
       }
-      function existing() {
-        return resource.data;
-      }
-      function incoming() {
-        return request.resource.data;
-      }
-      // a get on a missing doc (or one not yet visible right after create)
-      // evaluates these with a null `resource`; guard it so reads deny cleanly
-      // instead of throwing a null-dereference error on existing().<field>.
-      function docExists() {
-        return resource != null;
-      }
-      function isOwner() {
-        return isSignedIn() && docExists()
-          && existing().ownerId == request.auth.uid;
-      }
-      function isMember() {
-        return isSignedIn() && docExists()
-          && request.auth.uid in existing().memberIds;
-      }
-      function isEditor() {
-        return isOwner()
-          || (isMember() && existing().roles[request.auth.uid] == 'editor');
-      }
-      // an invited user (by email) reading/claiming a graph they don't yet belong to
-      function isInvited() {
-        return isSignedIn() && docExists()
-          && existing().inviteEmails != null
-          && request.auth.token.email in existing().inviteEmails;
-      }
-      // claiming an invite: the user adds *themselves* to memberIds. Other field
-      // tampering during a claim is possible but low-impact for this app; harden
-      // with a Cloud Function later if needed.
-      function isClaiming() {
-        return isInvited()
-          && !(request.auth.uid in existing().memberIds)
-          && request.auth.uid in incoming().memberIds;
-      }
 
-      allow read: if isMember() || isInvited();
-      allow create: if isSignedIn()
-        && incoming().ownerId == request.auth.uid
-        && request.auth.uid in incoming().memberIds;
-      allow update: if isEditor() || isClaiming();
-      allow delete: if isOwner();
+      allow read, write: if isSignedIn();
     }
   }
 }

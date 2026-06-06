@@ -5,7 +5,6 @@ import { useAuth } from '@/contexts/auth';
 import {
   graphSnapshot,
   useProductionLibrary,
-  type GraphRole,
 } from '@/contexts/productionLibrary';
 import { useProductionStore } from '@/contexts/productionStore';
 
@@ -18,7 +17,6 @@ import { createRtdbProvider, type RtdbProvider } from './rtdbProvider';
 interface CollabState {
   graphId: string | null;
   status: 'idle' | 'loading' | 'ready';
-  role: GraphRole | undefined;
   canUndo: boolean;
   canRedo: boolean;
   undo: () => void;
@@ -38,7 +36,6 @@ const asyncNoop = async () => {
 export const useCollab = create<CollabState>()(() => ({
   graphId: null,
   status: 'idle',
-  role: undefined,
   canUndo: false,
   canRedo: false,
   undo: noop,
@@ -81,7 +78,7 @@ const teardown = () => {
   current = null;
 };
 
-const open = (graphId: string, role: GraphRole) => {
+const open = (graphId: string) => {
   teardown();
 
   const user = useAuth.getState().user;
@@ -89,9 +86,8 @@ const open = (graphId: string, role: GraphRole) => {
 
   // start from a clean slate; the provider hydrates from the snapshot + live tail
   useProductionStore.getState().reset();
-  useCollab.setState({ graphId, role, status: 'loading' });
+  useCollab.setState({ graphId, status: 'loading' });
 
-  const canWrite = role !== 'viewer';
   const graph = createGraphDoc();
 
   // undo only the local user's edits — remote/provider origins are untracked
@@ -119,7 +115,8 @@ const open = (graphId: string, role: GraphRole) => {
     graphId,
     graph,
     self,
-    canWrite,
+    // every signed-in user can edit every graph
+    true,
     snapshot,
     () => useCollab.setState({ status: 'ready' }),
   );
@@ -129,10 +126,10 @@ const open = (graphId: string, role: GraphRole) => {
     await provider.compact();
   };
 
-  // debounced autosave on local edits only (editors only)
+  // debounced autosave on local edits only
   const autosave = trailingDebounce(() => void save(), AUTOSAVE_MS);
   const onLocalUpdate = (_u: Uint8Array, origin: unknown) => {
-    if (canWrite && origin === LOCAL_ORIGIN) autosave();
+    if (origin === LOCAL_ORIGIN) autosave();
   };
   graph.doc.on('update', onLocalUpdate);
 
@@ -165,7 +162,6 @@ const close = () => {
   useCollab.setState({
     graphId: null,
     status: 'idle',
-    role: undefined,
     canUndo: false,
     canRedo: false,
     undo: noop,
@@ -179,7 +175,7 @@ const close = () => {
 // drive the active session off the library's active graph
 let lastGraphId: string | null = null;
 const react = () => {
-  const { activeId, graphs } = useProductionLibrary.getState();
+  const { activeId } = useProductionLibrary.getState();
   if (activeId === lastGraphId) return;
   lastGraphId = activeId;
 
@@ -187,8 +183,7 @@ const react = () => {
     close();
     return;
   }
-  const role = graphs.find(graph => graph.id === activeId)?.role ?? 'viewer';
-  open(activeId, role);
+  open(activeId);
 };
 
 useProductionLibrary.subscribe(react);

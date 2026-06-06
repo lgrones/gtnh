@@ -1,3 +1,5 @@
+import { Box } from '@mantine/core';
+import { IconPointer2 } from '@tabler/icons-react';
 import { useReactFlow } from '@xyflow/react';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -13,9 +15,11 @@ export const Cursors = () => {
     <>
       {peers.map(peer => {
         if (!peer.cursor) return null;
+
         const { x, y } = flowToScreenPosition(peer.cursor);
+
         return (
-          <div
+          <Box
             key={peer.uid}
             style={{
               position: 'fixed',
@@ -26,14 +30,7 @@ export const Cursors = () => {
               transform: 'translate(-2px, -2px)',
             }}
           >
-            <svg width={18} height={18} viewBox="0 0 18 18" fill="none">
-              <path
-                d="M2 2L8 16L10 10L16 8L2 2Z"
-                fill={peer.color}
-                stroke="white"
-                strokeWidth={1}
-              />
-            </svg>
+            <IconPointer2 size={18} fill={peer.color} stroke="white" />
             <span
               style={{
                 position: 'absolute',
@@ -50,7 +47,7 @@ export const Cursors = () => {
             >
               {peer.name}
             </span>
-          </div>
+          </Box>
         );
       })}
     </>

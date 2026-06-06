@@ -1,8 +1,10 @@
 import {
-  GoogleAuthProvider,
+  EmailAuthProvider,
   onAuthStateChanged,
-  signInWithPopup,
+  reauthenticateWithCredential,
+  signInWithEmailAndPassword,
   signOut as firebaseSignOut,
+  updatePassword,
   type User,
 } from 'firebase/auth';
 import { create } from 'zustand';
@@ -14,20 +16,37 @@ interface AuthState {
   // true until the first onAuthStateChanged fires — avoids flashing the
   // sign-in screen before Firebase restores a persisted session
   loading: boolean;
-  signIn: () => Promise<void>;
+  // email/password sign-in only. Account creation is disabled in the Firebase
+  // console (Authentication → Settings → User actions), so the only accounts
+  // that exist are ones added by hand — there is no public sign-up path.
+  signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
+  // changing a password is a security-sensitive op, so Firebase requires a
+  // recent login. Reauthenticate with the current password first, then update.
+  changePassword: (
+    currentPassword: string,
+    newPassword: string,
+  ) => Promise<void>;
 }
-
-const provider = new GoogleAuthProvider();
 
 export const useAuth = create<AuthState>()(() => ({
   user: null,
   loading: true,
-  signIn: async () => {
-    await signInWithPopup(auth, provider);
+  signIn: async (email, password) => {
+    await signInWithEmailAndPassword(auth, email, password);
   },
   signOut: async () => {
     await firebaseSignOut(auth);
+  },
+  changePassword: async (currentPassword, newPassword) => {
+    const user = auth.currentUser;
+    if (!user?.email) throw new Error('Not signed in');
+    const credential = EmailAuthProvider.credential(
+      user.email,
+      currentPassword,
+    );
+    await reauthenticateWithCredential(user, credential);
+    await updatePassword(user, newPassword);
   },
 }));
 

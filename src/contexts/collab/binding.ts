@@ -2,6 +2,7 @@ import { type Edge } from '@xyflow/react';
 
 import {
   useProductionStore,
+  type GeneratorSelection,
   type ProductionNode,
 } from '@/contexts/productionStore';
 
@@ -19,7 +20,7 @@ const same = (a: unknown, b: unknown) =>
 // observer (skipped via writingLocal), and a doc→store apply fires the store
 // subscriber (skipped via applyingRemote).
 export const bindStore = (graph: YjsGraph): Binding => {
-  const { doc, nodes: yNodes, edges: yEdges } = graph;
+  const { doc, nodes: yNodes, edges: yEdges, meta: yMeta } = graph;
   let applyingRemote = false;
   let writingLocal = false;
 
@@ -76,19 +77,46 @@ export const bindStore = (graph: YjsGraph): Binding => {
     writingLocal = false;
   };
 
+  // doc → store: the per-graph generator selection (null when unset)
+  const pullMeta = () => {
+    const generator =
+      (yMeta.get('generator') as GeneratorSelection | undefined) ?? null;
+    applyingRemote = true;
+    useProductionStore.setState({ generator });
+    applyingRemote = false;
+  };
+
+  // store → doc: write (or clear) the generator selection under one transaction
+  const pushMeta = (generator: GeneratorSelection | null) => {
+    if (same(yMeta.get('generator') ?? null, generator)) return;
+    writingLocal = true;
+    doc.transact(() => {
+      if (generator) yMeta.set('generator', generator);
+      else yMeta.delete('generator');
+    }, LOCAL_ORIGIN);
+    writingLocal = false;
+  };
+
   // sync the store to whatever the doc already holds (snapshot loaded before bind)
   pullToStore();
+  pullMeta();
 
   const onDocChange = () => {
     if (writingLocal) return;
     pullToStore();
   };
+  const onMetaChange = () => {
+    if (writingLocal) return;
+    pullMeta();
+  };
   yNodes.observe(onDocChange);
   yEdges.observe(onDocChange);
+  yMeta.observe(onMetaChange);
 
   const unsubscribe = useProductionStore.subscribe(state => {
     if (applyingRemote) return;
     pushToDoc(state.nodes, state.edges);
+    pushMeta(state.generator);
   });
 
   return {
@@ -96,6 +124,7 @@ export const bindStore = (graph: YjsGraph): Binding => {
       unsubscribe();
       yNodes.unobserve(onDocChange);
       yEdges.unobserve(onDocChange);
+      yMeta.unobserve(onMetaChange);
     },
   };
 };
