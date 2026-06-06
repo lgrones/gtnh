@@ -1,5 +1,10 @@
 import { type Connection, type Edge } from '@xyflow/react';
-import ELK, { type ElkNode } from 'elkjs/lib/elk.bundled.js';
+
+// inline import() type, not a static `import` — a static (even type-only) import
+// from elkjs makes the bundler treat the module as statically loaded and refuse
+// to split it out of the main chunk (INEFFECTIVE_DYNAMIC_IMPORT). this keeps the
+// only elkjs reference the dynamic import() in getElk below.
+type ElkNode = import('elkjs/lib/elk.bundled.js').ElkNode;
 
 import {
   DRAG_HANDLE_CLASS,
@@ -115,7 +120,16 @@ export const normalizeNodes = (nodes: ProductionNode[]): ProductionNode[] =>
 // fallback node size when React Flow hasn't measured a node yet
 const DEFAULT_NODE_SIZE = { width: 280, height: 160 };
 
-const elk = new ELK();
+// elk.bundled.js is a ~1.4MB GWT blob — load it only when a layout is actually
+// requested (an explicit user action), not in the initial app bundle. cached
+// after first use.
+let elkInstance:
+  | Promise<InstanceType<typeof import('elkjs/lib/elk.bundled.js').default>>
+  | undefined;
+const getElk = () =>
+  (elkInstance ??= import('elkjs/lib/elk.bundled.js').then(
+    module => new module.default(),
+  ));
 
 // arrange the graph into left-to-right layers with ELK. recipe input/output
 // handles become fixed-order ports (inputs WEST, outputs EAST) so ELK orders
@@ -172,6 +186,7 @@ export const layoutNodes = async (
     })),
   };
 
+  const elk = await getElk();
   const laid = await elk.layout(graph);
   const positions = new Map(laid.children?.map(child => [child.id, child]));
 

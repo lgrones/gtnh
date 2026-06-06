@@ -39,6 +39,12 @@
   }
 }
 
+/* Mantine Overrides */
+
+:root[data-mantine-color-scheme='dark'] {
+  --mantine-color-body: var(--mantine-color-dark-8);
+}
+
 .mantine-Modal-header {
   background-color: transparent;
 }

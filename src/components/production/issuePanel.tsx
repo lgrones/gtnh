@@ -24,7 +24,7 @@ export const IssuePanel = () => {
 
       <Button
         variant="filled"
-        color="gray"
+        color="gray.9"
         leftSection={<IconChecklist size={16} />}
         onClick={() => setIssues(validateGraph(nodes, edges))}
         style={{ flexShrink: 0 }}

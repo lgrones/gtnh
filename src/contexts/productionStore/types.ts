@@ -82,6 +82,14 @@ export interface Clipboard {
   edges: Edge[];
 }
 
+// per-graph generator picker selection for the energy panel. `fuelName` null
+// means "default to the category's first fuel". stored per graph (mirrored into
+// the Yjs doc), so each graph keeps its own choice.
+export interface GeneratorSelection {
+  categoryId: string;
+  fuelName: string | null;
+}
+
 export interface ProductionState {
   nodes: ProductionNode[];
   edges: Edge[];
@@ -110,6 +118,11 @@ export interface ProductionState {
   // paste at the given flow position (anchored to the selection's top-left);
   // falls back to a fixed offset from the originals when no position is given
   paste: (position?: { x: number; y: number }) => void;
+
+  // per-graph generator selection (null until the user picks one). mirrored to
+  // the Yjs doc by the collab binding, so it's saved + synced with the graph.
+  generator: GeneratorSelection | null;
+  setGenerator: (selection: GeneratorSelection) => void;
 
   // replace the whole graph and wipe undo/redo history
   // reset() => empty (new line), reset(nodes, edges) => load a saved line

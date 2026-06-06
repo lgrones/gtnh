@@ -1,0 +1,17 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // graphs: durable per-graph compacted Yjs snapshot. The live editing delta
+    // stream lives in Realtime Database. All graphs are shared between every
+    // user, so any signed-in user has full access. Account creation is disabled
+    // in the console, so the signed-in set is exactly the people added by hand.
+    match /graphs/{graphId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+
+      allow read, write: if isSignedIn();
+    }
+  }
+}

@@ -7,12 +7,70 @@ import {
   TextInput,
 } from '@mantine/core';
 import { modals } from '@mantine/modals';
-import { IconPlus, IconTournament, IconX } from '@tabler/icons-react';
-import { useEffect, useRef } from 'react';
+import { IconPlus, IconX } from '@tabler/icons-react';
 import { useShallow } from 'zustand/react/shallow';
 
-import { useProductionLibrary } from '@/contexts/productionLibrary';
-import { useProductionStore } from '@/contexts/productionStore';
+import {
+  useProductionLibrary,
+  type GraphMeta,
+} from '@/contexts/productionLibrary';
+
+// one library row. the name input is uncontrolled (defaultValue) on purpose:
+// rename writes to Firestore and the new name only comes back a render later via
+// the snapshot, so a *controlled* value lags and resets the caret to the end on
+// every keystroke. letting the DOM own the value keeps the caret put; the row is
+// keyed by graph.id upstream, so it re-seeds defaultValue when the graph changes.
+const GraphRow = ({
+  graph,
+  active,
+  onSelect,
+  onRename,
+  onDelete,
+}: {
+  graph: GraphMeta;
+  active: boolean;
+  onSelect: (id: string) => void;
+  onRename: (id: string, name: string) => void;
+  onDelete: (id: string) => void;
+}) => (
+  <Group
+    gap="xs"
+    mx="-xs"
+    px="xs"
+    bg={active ? 'gray.9' : undefined}
+    style={{ borderRadius: 'var(--mantine-radius-default)' }}
+  >
+    <TextInput
+      flex={1}
+      variant="unstyled"
+      defaultValue={graph.name}
+      onFocus={() => onSelect(graph.id)}
+      onChange={e => onRename(graph.id, e.currentTarget.value)}
+      styles={{ input: { backgroundColor: 'transparent', border: 'none' } }}
+    />
+
+    <ActionIcon
+      variant="subtle"
+      color="gray"
+      aria-label="Delete line"
+      onClick={() =>
+        modals.openConfirmModal({
+          title: 'Delete production line',
+          children: (
+            <Text size="sm">
+              You sure you wanna delete this production line?
+            </Text>
+          ),
+          labels: { confirm: 'Delete', cancel: 'Cancel' },
+          confirmProps: { color: 'red' },
+          onConfirm: () => onDelete(graph.id),
+        })
+      }
+    >
+      <IconX size={16} />
+    </ActionIcon>
+  </Group>
+);
 
 export const LibPanel = () => {
   const {
@@ -32,37 +90,6 @@ export const LibPanel = () => {
       removeGraph: state.removeGraph,
     })),
   );
-  const reset = useProductionStore(state => state.reset);
-
-  // which graph the working store currently holds. guards the save subscribe
-  // against the switch window: when activeId flips, the store still has the OLD
-  // graph until the load effect below runs — saving then would write the old
-  // nodes under the new id and clobber it. only persist once they match.
-  const loadedId = useRef<string | null>(null);
-
-  // load the active saved graph into the working store whenever it changes
-  // (depends on activeId only — saveActive must not retrigger this)
-  useEffect(() => {
-    const graph = useProductionLibrary
-      .getState()
-      .graphs.find(g => g.id === activeId);
-
-    reset(graph?.nodes ?? [], graph?.edges ?? []);
-    loadedId.current = activeId;
-  }, [activeId, reset]);
-
-  // sync every working-store edit back into the active saved graph
-  useEffect(
-    () =>
-      useProductionStore.subscribe(state => {
-        const library = useProductionLibrary.getState();
-        // skip emissions while the store doesn't yet reflect the active graph
-        // (load race) — otherwise we'd persist stale/empty state over it
-        if (loadedId.current !== library.activeId) return;
-        library.saveActive(state.nodes, state.edges);
-      }),
-    [],
-  );
 
   return (
     <Paper
@@ -78,7 +105,7 @@ export const LibPanel = () => {
         <ActionIcon
           variant="subtle"
           color="gray"
-          onClick={createGraph}
+          onClick={() => void createGraph()}
           aria-label="New line"
         >
           <IconPlus size={16} />
@@ -86,45 +113,14 @@ export const LibPanel = () => {
       </Group>
 
       {graphs.map(graph => (
-        <Group key={graph.id} gap="xs">
-          {graph.id === activeId && (
-            <IconTournament
-              size={16}
-              color="var(--mantine-color-indigo-filled)"
-            />
-          )}
-
-          <TextInput
-            flex={1}
-            variant="unstyled"
-            value={graph.name}
-            onFocus={() => selectGraph(graph.id)}
-            onChange={e => renameGraph(graph.id, e.currentTarget.value)}
-            styles={{
-              input: { backgroundColor: 'transparent', border: 'none' },
-            }}
-          />
-
-          <ActionIcon
-            variant="subtle"
-            color="gray"
-            onClick={() =>
-              modals.openConfirmModal({
-                title: 'Delete production line',
-                children: (
-                  <Text size="sm">
-                    You sure you wanna delete this production line?
-                  </Text>
-                ),
-                labels: { confirm: 'Delete', cancel: 'Cancel' },
-                confirmProps: { color: 'red' },
-                onConfirm: () => removeGraph(graph.id),
-              })
-            }
-          >
-            <IconX size={16} />
-          </ActionIcon>
-        </Group>
+        <GraphRow
+          key={graph.id}
+          graph={graph}
+          active={graph.id === activeId}
+          onSelect={selectGraph}
+          onRename={(id, name) => void renameGraph(id, name)}
+          onDelete={id => void removeGraph(id)}
+        />
       ))}
     </Paper>
   );

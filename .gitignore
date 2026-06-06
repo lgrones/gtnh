@@ -15,6 +15,15 @@ test_results
 test_coverage
 .vitest-attachments
 
+
+# firebase
+.firebase
+firebase-debug.log
+database-debug.log
+firestore-debug.log
+ui-debug.log
+emulator-data/
+
 # Editor directories and files
 .idea
 .DS_Store

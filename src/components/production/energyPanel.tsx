@@ -6,7 +6,7 @@ import {
   IconFlame,
   IconSettingsBolt,
 } from '@tabler/icons-react';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
 import {
   demandByTier,
@@ -41,9 +41,12 @@ export const EnergyPanel = () => {
   );
   const byTier = useMemo(() => demandByTier(nodes), [nodes]);
 
-  // picker selection: generator category and fuel (tier is solved per machine)
-  const [categoryId, setCategoryId] = useState(GENERATORS[0]?.id ?? '');
-  const [fuelName, setFuelName] = useState<string | null>(null);
+  // picker selection lives in the store so it's saved + synced per graph (tier
+  // is solved per machine). null fields fall back to the first category/fuel.
+  const generator = useProductionStore(state => state.generator);
+  const setGenerator = useProductionStore(state => state.setGenerator);
+  const categoryId = generator?.categoryId ?? GENERATORS[0]?.id ?? '';
+  const fuelName = generator?.fuelName ?? null;
 
   const category = GENERATORS.find(c => c.id === categoryId) ?? GENERATORS[0];
   const fuel =
@@ -79,8 +82,8 @@ export const EnergyPanel = () => {
         value={categoryId}
         onChange={value => {
           if (!value) return;
-          setCategoryId(value);
-          setFuelName(null); // re-default the fuel to the new category
+          // re-default the fuel to the new category
+          setGenerator({ categoryId: value, fuelName: null });
         }}
         allowDeselect={false}
         comboboxProps={{ withinPortal: true }}
@@ -94,7 +97,7 @@ export const EnergyPanel = () => {
           label: `${f.name} · ${fmt(f.value, 1)} EU/${category.unit}`,
         }))}
         value={fuel.name}
-        onChange={setFuelName}
+        onChange={value => setGenerator({ categoryId, fuelName: value })}
         allowDeselect={false}
         comboboxProps={{ withinPortal: true }}
       />
@@ -169,7 +172,7 @@ export const EnergyPanel = () => {
         </>
       ) : (
         <Text size="sm" c="dimmed">
-          Set EU, time and voltage on recipe nodes to size generators.
+          Set EU, time and voltage on recipe nodes to calculate generators
         </Text>
       )}
     </Paper>
