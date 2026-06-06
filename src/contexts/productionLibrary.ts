@@ -35,11 +35,20 @@ export interface GraphMeta {
 interface GraphDoc {
   ownerId: string;
   name: string;
+  snapshot?: string | null;
   roles?: Record<string, GraphRole>;
   invites?: Record<string, GraphRole>;
   memberIds?: string[];
   inviteEmails?: string[];
 }
+
+// the durable Yjs snapshot per graph, kept off the reactive store (it's a large
+// blob and churns on every save) but populated from the same live subscription
+// that drives the list. the collab session reads it here when opening a graph,
+// which avoids a second Firestore read that would race a just-created doc.
+const snapshotCache = new Map<string, string | null>();
+export const graphSnapshot = (id: string): string | null =>
+  snapshotCache.get(id) ?? null;
 
 interface LibraryState {
   graphs: GraphMeta[];
@@ -150,6 +159,7 @@ const syncToUser = (uid: string | null, email: string | null) => {
     snap => {
       const graphs: GraphMeta[] = snap.docs.map(d => {
         const data = d.data() as GraphDoc;
+        snapshotCache.set(d.id, data.snapshot ?? null);
         const role: GraphRole =
           data.ownerId === uid ? 'owner' : (data.roles?.[uid] ?? 'viewer');
         return { id: d.id, name: data.name, ownerId: data.ownerId, role };

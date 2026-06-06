@@ -3,6 +3,7 @@ import { create } from 'zustand';
 
 import { useAuth } from '@/contexts/auth';
 import {
+  graphSnapshot,
   useProductionLibrary,
   type GraphRole,
 } from '@/contexts/productionLibrary';
@@ -113,8 +114,14 @@ const open = (graphId: string, role: GraphRole) => {
     name: user.displayName ?? user.email ?? 'Anonymous',
     color: colorForUid(user.uid),
   };
-  const provider = createRtdbProvider(graphId, graph, self, canWrite, () =>
-    useCollab.setState({ status: 'ready' }),
+  const snapshot = graphSnapshot(graphId);
+  const provider = createRtdbProvider(
+    graphId,
+    graph,
+    self,
+    canWrite,
+    snapshot,
+    () => useCollab.setState({ status: 'ready' }),
   );
 
   const save = async () => {

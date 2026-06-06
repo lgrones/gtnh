@@ -15,11 +15,19 @@ service cloud.firestore {
       function incoming() {
         return request.resource.data;
       }
+      // a get on a missing doc (or one not yet visible right after create)
+      // evaluates these with a null `resource`; guard it so reads deny cleanly
+      // instead of throwing a null-dereference error on existing().<field>.
+      function docExists() {
+        return resource != null;
+      }
       function isOwner() {
-        return isSignedIn() && existing().ownerId == request.auth.uid;
+        return isSignedIn() && docExists()
+          && existing().ownerId == request.auth.uid;
       }
       function isMember() {
-        return isSignedIn() && request.auth.uid in existing().memberIds;
+        return isSignedIn() && docExists()
+          && request.auth.uid in existing().memberIds;
       }
       function isEditor() {
         return isOwner()
@@ -27,7 +35,7 @@ service cloud.firestore {
       }
       // an invited user (by email) reading/claiming a graph they don't yet belong to
       function isInvited() {
-        return isSignedIn()
+        return isSignedIn() && docExists()
           && existing().inviteEmails != null
           && request.auth.token.email in existing().inviteEmails;
       }

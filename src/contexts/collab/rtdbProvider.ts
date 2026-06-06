@@ -13,7 +13,6 @@ import * as Y from 'yjs';
 import { rtdb } from '@/infrastructure/firebase';
 
 import { applyEncoded, type YjsGraph } from './doc';
-import { loadSnapshot } from './persistence';
 import { usePresence, type Peer } from './presence';
 
 // origin tag for updates applied off the wire — the UndoManager ignores it and
@@ -41,6 +40,7 @@ export const createRtdbProvider = (
   graph: YjsGraph,
   self: Self,
   canWrite: boolean,
+  snapshot: string | null,
   onReady: () => void,
 ): RtdbProvider => {
   const { doc } = graph;
@@ -49,7 +49,6 @@ export const createRtdbProvider = (
   const selfRef = ref(rtdb, `live/${graphId}/presence/${self.uid}`);
 
   const clientId = doc.clientID;
-  let disposed = false;
   const detach: (() => void)[] = [];
 
   // broadcast local edits to the tail (viewers never write; remote-origin
@@ -63,21 +62,16 @@ export const createRtdbProvider = (
     detach.push(() => doc.off('update', onUpdate));
   }
 
-  // load the durable snapshot, then attach to the live tail
-  const init = async () => {
-    const snapshot = await loadSnapshot(graphId);
-    if (disposed) return;
-    if (snapshot) applyEncoded(doc, snapshot, PROVIDER_ORIGIN);
-
-    const off = onChildAdded(updatesRef, snap => {
-      const val = snap.val() as { by: number; u: string } | null;
-      if (!val || val.by === clientId) return; // skip our own pushes
-      Y.applyUpdate(doc, fromBase64(val.u), PROVIDER_ORIGIN);
-    });
-    detach.push(off);
-    onReady();
-  };
-  void init();
+  // seed from the durable snapshot (already loaded by the library subscription),
+  // then attach to the live tail so subsequent edits stream in over RTDB
+  if (snapshot) applyEncoded(doc, snapshot, PROVIDER_ORIGIN);
+  const off = onChildAdded(updatesRef, snap => {
+    const val = snap.val() as { by: number; u: string } | null;
+    if (!val || val.by === clientId) return; // skip our own pushes
+    Y.applyUpdate(doc, fromBase64(val.u), PROVIDER_ORIGIN);
+  });
+  detach.push(off);
+  onReady();
 
   // presence: publish self, mirror peers into the presence store
   const publishSelf = (extra: Partial<Pick<Peer, 'cursor' | 'selection'>>) =>
@@ -101,7 +95,6 @@ export const createRtdbProvider = (
 
   return {
     destroy: () => {
-      disposed = true;
       for (const fn of detach) fn();
       void remove(selfRef);
       usePresence.setState({ peers: {} });
