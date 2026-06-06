@@ -12,7 +12,7 @@ export interface Binding {
   destroy: () => void;
 }
 
-const same = (a: unknown, b: unknown) =>
+const isDeepEqual = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
 
 // keep the Zustand store (what XYFlow renders) and the Yjs doc mirrored both
@@ -34,6 +34,7 @@ export const bindStore = (graph: YjsGraph): Binding => {
 
     const nodes = [...yNodes.values()].map(node => {
       const old = prevNodes.get(node.id);
+
       return old
         ? ({
             ...node,
@@ -42,8 +43,10 @@ export const bindStore = (graph: YjsGraph): Binding => {
           } as ProductionNode)
         : node;
     });
+
     const edges = [...yEdges.values()].map(edge => {
       const old = prevEdges.get(edge.id);
+
       return old ? ({ ...edge, selected: old.selected } as Edge) : edge;
     });
 
@@ -55,25 +58,37 @@ export const bindStore = (graph: YjsGraph): Binding => {
   // store → doc: diff current store state into the maps under one transaction
   const pushToDoc = (nodes: ProductionNode[], edges: Edge[]) => {
     writingLocal = true;
+
     doc.transact(() => {
       const nodeIds = new Set<string>();
+
       for (const node of nodes) {
         nodeIds.add(node.id);
+
         const record = stripNode(node);
-        if (!same(yNodes.get(node.id), record)) yNodes.set(node.id, record);
+
+        if (!isDeepEqual(yNodes.get(node.id), record))
+          yNodes.set(node.id, record);
       }
+
       for (const id of [...yNodes.keys()])
         if (!nodeIds.has(id)) yNodes.delete(id);
 
       const edgeIds = new Set<string>();
+
       for (const edge of edges) {
         edgeIds.add(edge.id);
+
         const record = stripEdge(edge);
-        if (!same(yEdges.get(edge.id), record)) yEdges.set(edge.id, record);
+
+        if (!isDeepEqual(yEdges.get(edge.id), record))
+          yEdges.set(edge.id, record);
       }
+
       for (const id of [...yEdges.keys()])
         if (!edgeIds.has(id)) yEdges.delete(id);
     }, LOCAL_ORIGIN);
+
     writingLocal = false;
   };
 
@@ -81,6 +96,7 @@ export const bindStore = (graph: YjsGraph): Binding => {
   const pullMeta = () => {
     const generator =
       (yMeta.get('generator') as GeneratorSelection | undefined) ?? null;
+
     applyingRemote = true;
     useProductionStore.setState({ generator });
     applyingRemote = false;
@@ -88,12 +104,15 @@ export const bindStore = (graph: YjsGraph): Binding => {
 
   // store → doc: write (or clear) the generator selection under one transaction
   const pushMeta = (generator: GeneratorSelection | null) => {
-    if (same(yMeta.get('generator') ?? null, generator)) return;
+    if (isDeepEqual(yMeta.get('generator') ?? null, generator)) return;
+
     writingLocal = true;
+
     doc.transact(() => {
       if (generator) yMeta.set('generator', generator);
       else yMeta.delete('generator');
     }, LOCAL_ORIGIN);
+
     writingLocal = false;
   };
 
@@ -103,18 +122,23 @@ export const bindStore = (graph: YjsGraph): Binding => {
 
   const onDocChange = () => {
     if (writingLocal) return;
+
     pullToStore();
   };
+
   const onMetaChange = () => {
     if (writingLocal) return;
+
     pullMeta();
   };
+
   yNodes.observe(onDocChange);
   yEdges.observe(onDocChange);
   yMeta.observe(onMetaChange);
 
   const unsubscribe = useProductionStore.subscribe(state => {
     if (applyingRemote) return;
+
     pushToDoc(state.nodes, state.edges);
     pushMeta(state.generator);
   });

@@ -7,7 +7,7 @@ import {
   Stack,
   Text,
 } from '@mantine/core';
-import { IconDeviceFloppy, IconPlus } from '@tabler/icons-react';
+import { IconCheck, IconDeviceFloppy, IconPlus } from '@tabler/icons-react';
 import {
   Background,
   Controls as FlowControls,
@@ -19,6 +19,7 @@ import {
 } from '@xyflow/react';
 import {
   useCallback,
+  useEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -87,11 +88,32 @@ const FlowCanvas = ({ name }: { name: string }) => {
   const [menuOpened, setMenuOpened] = useState(false);
   const closeMenu = useCallback(() => setMenuOpened(false), []);
 
+  // save button feedback: spinner while compacting, then a brief "Saved" tick.
+  // `loading` disables the button, so overlapping clicks can't stack saves.
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>(
+    'idle',
+  );
+  const savedTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const handleSave = useCallback(async () => {
+    setSaveState('saving');
+    try {
+      await save();
+      setSaveState('saved');
+      clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSaveState('idle'), 2000);
+    } catch {
+      setSaveState('idle');
+    }
+  }, [save]);
+  useEffect(() => () => clearTimeout(savedTimer.current), []);
+
   // throttle cursor broadcasts (~20/s) — presence is cheap but not free
   const lastMove = useRef(0);
   const onMouseMove = (event: MouseEvent) => {
     const now = Date.now();
+
     if (now - lastMove.current < 50) return;
+
     lastMove.current = now;
     setCursor(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
   };
@@ -137,10 +159,18 @@ const FlowCanvas = ({ name }: { name: string }) => {
           <Button
             size="xs"
             variant="default"
-            leftSection={<IconDeviceFloppy size={14} />}
-            onClick={() => void save()}
+            color={saveState === 'saved' ? 'green' : undefined}
+            loading={saveState === 'saving'}
+            leftSection={
+              saveState === 'saved' ? (
+                <IconCheck size={14} />
+              ) : (
+                <IconDeviceFloppy size={14} />
+              )
+            }
+            onClick={() => void handleSave()}
           >
-            Save
+            {saveState === 'saved' ? 'Saved' : 'Save'}
           </Button>
         </Panel>
 

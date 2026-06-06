@@ -1,7 +1,6 @@
 import { Menu, Text } from '@mantine/core';
 import { useHotkeys, useMousePosition, useUncontrolled } from '@mantine/hooks';
 import { useReactFlow } from '@xyflow/react';
-import type { PropsWithChildren } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { useCollab } from '@/contexts/collab/session';
@@ -12,10 +11,11 @@ import {
   type ProductionNodeType,
 } from '@/contexts/productionStore';
 
-interface ProductionFlowControlsProps extends PropsWithChildren {
+interface ControlsProps {
   opened?: boolean;
   defaultOpened?: boolean;
   onChange?: (opened: boolean) => void;
+  children?: React.ReactNode;
 }
 
 export const Controls = ({
@@ -23,7 +23,7 @@ export const Controls = ({
   opened,
   defaultOpened,
   onChange,
-}: ProductionFlowControlsProps) => {
+}: ControlsProps) => {
   const [_opened, setOpened] = useUncontrolled({
     value: opened,
     defaultValue: defaultOpened,
@@ -34,7 +34,9 @@ export const Controls = ({
   const { screenToFlowPosition, getNodes, getEdges, deleteElements, fitView } =
     useReactFlow();
   const position = screenToFlowPosition(useMousePosition());
+
   const actions = useProductionControls();
+
   const { canUndo, canRedo, undo, redo } = useCollab(
     useShallow(state => ({
       canUndo: state.canUndo,
@@ -50,6 +52,7 @@ export const Controls = ({
       state.nodes.some(node => node.selected) ||
       state.edges.some(edge => edge.selected),
   );
+
   const hasClipboard = useProductionStore(
     state => (state.clipboard?.nodes.length ?? 0) > 0,
   );

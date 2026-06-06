@@ -22,6 +22,7 @@ export interface YjsGraph {
 
 export const createGraphDoc = (): YjsGraph => {
   const doc = new Y.Doc();
+
   return {
     doc,
     nodes: doc.getMap('nodes'),
@@ -43,8 +44,10 @@ const VOLATILE = new Set([
 
 const strip = <T extends object>(value: T): T => {
   const clone: Record<string, unknown> = {};
+
   for (const [key, val] of Object.entries(value))
     if (!VOLATILE.has(key)) clone[key] = val;
+
   return clone as T;
 };
 

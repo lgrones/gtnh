@@ -56,8 +56,10 @@ export const createRtdbProvider = (
   if (canWrite) {
     const onUpdate = (update: Uint8Array, origin: unknown) => {
       if (origin === PROVIDER_ORIGIN) return;
+
       void push(updatesRef, { by: clientId, u: toBase64(update) });
     };
+
     doc.on('update', onUpdate);
     detach.push(() => doc.off('update', onUpdate));
   }
@@ -65,11 +67,15 @@ export const createRtdbProvider = (
   // seed from the durable snapshot (already loaded by the library subscription),
   // then attach to the live tail so subsequent edits stream in over RTDB
   if (snapshot) applyEncoded(doc, snapshot, PROVIDER_ORIGIN);
+
   const off = onChildAdded(updatesRef, snap => {
     const val = snap.val() as { by: number; u: string } | null;
+
     if (!val || val.by === clientId) return; // skip our own pushes
+
     Y.applyUpdate(doc, fromBase64(val.u), PROVIDER_ORIGIN);
   });
+
   detach.push(off);
   onReady();
 
@@ -81,16 +87,20 @@ export const createRtdbProvider = (
       color: self.color,
       ...extra,
     });
+
   void publishSelf({ cursor: null, selection: [] });
   void onDisconnect(selfRef).remove();
 
   const offPresence = onValue(presenceRef, snap => {
     const all = (snap.val() ?? {}) as Record<string, Peer>;
     const peers: Record<string, Peer> = {};
+
     for (const [uid, peer] of Object.entries(all))
       if (uid !== self.uid) peers[uid] = peer;
+
     usePresence.setState({ peers });
   });
+
   detach.push(offPresence);
 
   return {

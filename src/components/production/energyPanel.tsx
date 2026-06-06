@@ -172,7 +172,7 @@ export const EnergyPanel = () => {
         </>
       ) : (
         <Text size="sm" c="dimmed">
-          Set EU, time and voltage on recipe nodes to size generators.
+          Set EU, time and voltage on recipe nodes to calculate generators
         </Text>
       )}
     </Paper>

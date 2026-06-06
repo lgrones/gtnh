@@ -24,7 +24,6 @@ const COLORS = [
   '#0ca678',
   '#f59f00',
   '#f76707',
-  '#e8590c',
 ] as const;
 
 // stable per-user color from a hash of the uid
@@ -32,5 +31,6 @@ export const colorForUid = (uid: string): string => {
   let hash = 0;
   for (let i = 0; i < uid.length; i++)
     hash = (hash * 31 + uid.charCodeAt(i)) | 0;
+
   return COLORS[Math.abs(hash) % COLORS.length] ?? COLORS[0];
 };

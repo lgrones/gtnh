@@ -40,11 +40,14 @@ export const useAuth = create<AuthState>()(() => ({
   },
   changePassword: async (currentPassword, newPassword) => {
     const user = auth.currentUser;
+
     if (!user?.email) throw new Error('Not signed in');
+
     const credential = EmailAuthProvider.credential(
       user.email,
       currentPassword,
     );
+
     await reauthenticateWithCredential(user, credential);
     await updatePassword(user, newPassword);
   },

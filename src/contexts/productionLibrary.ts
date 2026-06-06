@@ -92,6 +92,7 @@ export const useProductionLibrary = create<LibraryState>()((set, get) => ({
 export const useActiveGraph = (): GraphMeta | undefined => {
   const activeId = useProductionLibrary(state => state.activeId);
   const graphs = useProductionLibrary(state => state.graphs);
+
   return graphs.find(graph => graph.id === activeId);
 };
 
@@ -110,30 +111,29 @@ const syncToUser = (uid: string | null) => {
       activeId: null,
       loading: false,
     });
+
     return;
   }
 
   useProductionLibrary.setState({ loading: true });
-  unsubscribe = onSnapshot(
-    query(graphsCol, orderBy('createdAt')),
-    snap => {
-      const graphs: GraphMeta[] = snap.docs.map(d => {
-        const data = d.data() as GraphDoc;
+  unsubscribe = onSnapshot(query(graphsCol, orderBy('createdAt')), snap => {
+    const graphs: GraphMeta[] = snap.docs.map(d => {
+      const data = d.data() as GraphDoc;
 
-        snapshotCache.set(d.id, data.snapshot ?? null);
+      snapshotCache.set(d.id, data.snapshot ?? null);
 
-        return { id: d.id, name: data.name, ownerId: data.ownerId };
-      });
+      return { id: d.id, name: data.name, ownerId: data.ownerId };
+    });
 
-      const { activeId } = useProductionLibrary.getState();
-      const stillActive = graphs.some(graph => graph.id === activeId);
-      useProductionLibrary.setState({
-        graphs,
-        activeId: stillActive ? activeId : (graphs[0]?.id ?? null),
-        loading: false,
-      });
-    },
-  );
+    const { activeId } = useProductionLibrary.getState();
+    const stillActive = graphs.some(graph => graph.id === activeId);
+
+    useProductionLibrary.setState({
+      graphs,
+      activeId: stillActive ? activeId : (graphs[0]?.id ?? null),
+      loading: false,
+    });
+  });
 };
 
 // only resubscribe when the identity actually changes (auth fires on token

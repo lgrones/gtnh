@@ -59,10 +59,12 @@ let current: Session | null = null;
 // trailing debounce — collapse a burst of edits into one snapshot write
 const trailingDebounce = (fn: () => void, ms: number) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
+
   const run = () => {
     clearTimeout(timer);
     timer = setTimeout(fn, ms);
   };
+
   return Object.assign(run, { cancel: () => clearTimeout(timer) });
 };
 
@@ -94,11 +96,13 @@ const open = (graphId: string) => {
   const undoManager = new Y.UndoManager([graph.nodes, graph.edges], {
     trackedOrigins: new Set([LOCAL_ORIGIN]),
   });
+
   const refreshUndo = () =>
     useCollab.setState({
       canUndo: undoManager.canUndo(),
       canRedo: undoManager.canRedo(),
     });
+
   undoManager.on('stack-item-added', refreshUndo);
   undoManager.on('stack-item-popped', refreshUndo);
   undoManager.on('stack-cleared', refreshUndo);
@@ -110,6 +114,7 @@ const open = (graphId: string) => {
     name: user.displayName ?? user.email ?? 'Anonymous',
     color: colorForUid(user.uid),
   };
+
   const snapshot = graphSnapshot(graphId);
   const provider = createRtdbProvider(
     graphId,
@@ -183,6 +188,7 @@ const react = () => {
     close();
     return;
   }
+
   open(activeId);
 };
 
@@ -194,4 +200,5 @@ useAuth.subscribe(() => {
     close();
   }
 });
+
 react();
