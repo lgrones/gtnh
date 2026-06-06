@@ -15,10 +15,6 @@ test_results
 test_coverage
 .vitest-attachments
 
-# env
-.env
-.env.*
-!.env.example
 
 # firebase
 .firebase

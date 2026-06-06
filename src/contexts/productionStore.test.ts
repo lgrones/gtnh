@@ -1154,6 +1154,9 @@ describe('setGenerator', () => {
     state().setGenerator({ categoryId: 'diesel', fuelName: null });
     state().setGenerator({ categoryId: 'gas', fuelName: 'Methane' });
 
-    expect(state().generator).toEqual({ categoryId: 'gas', fuelName: 'Methane' });
+    expect(state().generator).toEqual({
+      categoryId: 'gas',
+      fuelName: 'Methane',
+    });
   });
 });

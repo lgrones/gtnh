@@ -46,9 +46,7 @@ const GraphRow = ({
       defaultValue={graph.name}
       onFocus={() => onSelect(graph.id)}
       onChange={e => onRename(graph.id, e.currentTarget.value)}
-      styles={{
-        input: { backgroundColor: 'transparent', border: 'none' },
-      }}
+      styles={{ input: { backgroundColor: 'transparent', border: 'none' } }}
     />
 
     <ActionIcon
