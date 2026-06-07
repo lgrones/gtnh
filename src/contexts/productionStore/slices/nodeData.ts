@@ -53,7 +53,8 @@ export const createNodeDataSlice: SliceCreator<NodeDataSlice> = (set, get) => ({
         item.id === itemId ? { ...item, ...patch } : item,
       ),
     }));
-    // propagate name/quantity change to any connected input leaf
+    // a rename may leave a recipe<->recipe edge with disagreeing names — the edge
+    // is kept (don't yank a connection mid-edit) and flagged by validateGraph
     set({ nodes: syncMirrors(nodes, get().edges) });
   },
 
@@ -64,7 +65,8 @@ export const createNodeDataSlice: SliceCreator<NodeDataSlice> = (set, get) => ({
         item.id === itemId ? { ...item, ...patch } : item,
       ),
     }));
-    // propagate name/quantity change to any connected sink
+    // propagate name/quantity change to any connected sink; a now-mismatched
+    // recipe<->recipe edge is left in place and surfaced by validateGraph
     set({ nodes: syncMirrors(nodes, get().edges) });
   },
 

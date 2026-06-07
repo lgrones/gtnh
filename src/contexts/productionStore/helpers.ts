@@ -379,14 +379,25 @@ export const syncMirrors = (
   });
 };
 
-// a balance problem found by validateGraph (run on demand, not while editing)
+// a problem found by validateGraph (run on demand, not while editing)
 export interface GraphIssue {
   recipe: string; // recipe node display name (receiver for deficit, else owner)
-  item: string; // item name
-  kind: 'deficit' | 'surplus' | 'unfed';
+  item: string; // item name (or the missing field, for `incomplete`)
+  kind: 'deficit' | 'surplus' | 'unfed' | 'incomplete' | 'mismatch';
   supply?: number; // deficit/surplus — the output's quantity
   demand?: number; // deficit/surplus — total downstream recipe demand
 }
+
+// recipe fields that must be filled for the line to be computable, paired with
+// the test that flags them as missing. `incomplete` issues report one per gap.
+const REQUIRED_RECIPE_FIELDS: {
+  label: string;
+  missing: (data: RecipeNodeData) => boolean;
+}[] = [
+  { label: 'name', missing: data => data.name.trim() === '' },
+  { label: 'energy (EU)', missing: data => data.eu <= 0 },
+  { label: 'duration', missing: data => data.time <= 0 },
+];
 
 // check quantity balance between recipes:
 //   - deficit: a recipe output feeds downstream recipes that demand more than
@@ -419,18 +430,44 @@ export const validateGraph = (
     if (!edge.sourceHandle) continue;
     const key = `${edge.source}:${edge.sourceHandle}`;
     if (sinkIds.has(edge.target)) absorbed.add(key);
-    if (
+
+    const output = recipeItem(index, edge.source, edge.sourceHandle, 'outputs');
+    const input =
       edge.targetHandle &&
-      recipeItem(index, edge.target, edge.targetHandle, 'inputs') !== undefined
-    ) {
+      recipeItem(index, edge.target, edge.targetHandle, 'inputs');
+
+    if (input) {
       let set = receivers.get(key);
       if (set === undefined) receivers.set(key, (set = new Set()));
       set.add(edge.target);
+
+      // a recipe<->recipe edge whose two item names disagree — usually the
+      // aftermath of renaming one side; the link is kept but flagged here
+      if (output) {
+        const a = output.name.trim().toLowerCase();
+        const b = input.name.trim().toLowerCase();
+        if (a !== b)
+          issues.push({
+            recipe: names.get(edge.source) ?? '',
+            item: `"${output.name}" → "${input.name}"`,
+            kind: 'mismatch',
+          });
+      }
     }
   }
 
   for (const node of nodes) {
     if (node.type !== 'recipeNode') continue;
+
+    // missing recipe fields the metrics depend on (name / energy / duration)
+    for (const field of REQUIRED_RECIPE_FIELDS)
+      if (field.missing(node.data))
+        issues.push({
+          recipe:
+            node.data.name.trim() === '' ? 'Unnamed recipe' : node.data.name,
+          item: field.label,
+          kind: 'incomplete',
+        });
 
     for (const output of node.data.outputs) {
       const key = `${node.id}:${output.id}`;

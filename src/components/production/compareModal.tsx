@@ -105,14 +105,14 @@ export const CompareModalContent = () => {
   const activeGraphId = useProductionLibrary(state => state.activeId);
   const liveNodes = useProductionStore(state => state.nodes);
   const liveEdges = useProductionStore(state => state.edges);
-  const [normalize, setNormalize] = useState(false);
+  const [normalize, setNormalize] = useState(true);
 
   // metrics per alternative: the active one from the live store, the rest decoded
   // from their cached snapshots (read-only, no extra Firestore reads)
-  const { metrics: rows, rankings } = useMemo(() => {
-    if (!line) return { metrics: [], rankings: {} };
+  const rows = useMemo(() => {
+    if (!line) return [];
 
-    const metrics = line.alternatives.map(alt => {
+    return line.alternatives.map(alt => {
       const graph =
         alt.id === activeGraphId
           ? { nodes: liveNodes, edges: liveEdges }
@@ -120,18 +120,6 @@ export const CompareModalContent = () => {
 
       return { alt, metrics: lineMetrics(graph.nodes, graph.edges) };
     });
-
-    const rankPower = rankBy(metrics, x => x.metrics.demand);
-    const rankTime = rankBy(metrics, x => x.metrics.time);
-
-    const rankings: Record<
-      string,
-      Record<'power' | 'time', Rank>
-    > = Object.fromEntries(
-      metrics.map(x => [x.alt.id, { power: rankPower(x), time: rankTime(x) }]),
-    );
-
-    return { metrics, rankings };
   }, [line, activeGraphId, liveNodes, liveEdges]);
 
   if (!line || rows.length === 0)
@@ -151,6 +139,17 @@ export const CompareModalContent = () => {
 
   // pair each row with its display scaling factor so cells never index back in
   const view = rows.map(r => ({ ...r, factor: factorFor(r.metrics) }));
+
+  // power (EU/t) is instantaneous draw — normalizing runs a recipe longer, not
+  // harder, so demand never scales. only time (and material quantities) do.
+  const rankPower = rankBy(view, x => x.metrics.demand);
+  const rankTime = rankBy(view, x => x.metrics.time * x.factor);
+  const rankings: Record<
+    string,
+    Record<'power' | 'time', Rank>
+  > = Object.fromEntries(
+    view.map(x => [x.alt.id, { power: rankPower(x), time: rankTime(x) }]),
+  );
 
   return (
     <Stack gap="md">
@@ -217,10 +216,10 @@ export const CompareModalContent = () => {
               />
             </Table.Th>
 
-            {view.map(({ alt, metrics, factor }) => (
+            {view.map(({ alt, metrics }) => (
               <Table.Td key={alt.id}>
                 <Group gap={4}>
-                  <Text size="sm">{fmt(metrics.demand * factor, 1)} EU/t</Text>
+                  <Text size="sm">{fmt(metrics.demand, 1)} EU/t</Text>
                   {rankings[alt.id]?.power === 'best' ? (
                     <IconTrendingUp
                       size={20}
@@ -360,17 +359,19 @@ export const CompareModalContent = () => {
               />
             </Table.Th>
 
-            {view.map(({ alt, metrics, factor }) => (
+            {view.map(({ alt, metrics }) => (
               <Table.Td key={alt.id}>
                 <ListCell
                   items={metrics.machines}
                   label={m =>
+                    // machine count is physical — normalizing runs them longer,
+                    // not in greater number, so it never scales (factor 1)
                     amountLabel(
                       {
                         name: `${m.machine || 'Unnamed machine'} (${m.voltage})`,
                         quantity: m.quantity,
                       },
-                      factor,
+                      1,
                     )
                   }
                   empty="none"
