@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   layoutNodes,
   lineEnergy,
+  lineMetrics,
   demandByTier,
   recipePower,
   useProductionStore,
@@ -1157,6 +1158,86 @@ describe('setGenerator', () => {
     expect(state().generator).toEqual({
       categoryId: 'gas',
       fuelName: 'Methane',
+    });
+  });
+});
+
+describe('lineMetrics', () => {
+  // input leaf -> recipe -> output sink, plus a byproduct -> disposal sink.
+  // recipe runs 3× (multiplier) at MV, 5s, 120 EU per run.
+  const buildLine = () => {
+    const recipe = addNode('recipeNode');
+    const inputId = addInput(recipe);
+    state().updateRecipeInput(recipe, inputId, { name: 'Ore', quantity: 2 });
+    const plateId = addOutput(recipe);
+    state().updateRecipeOutput(recipe, plateId, { name: 'Plate', quantity: 4 });
+    const slagId = addOutput(recipe);
+    state().updateRecipeOutput(recipe, slagId, { name: 'Slag', quantity: 1 });
+    state().updateRecipe(recipe, {
+      machine: 'EBF',
+      voltage: 'MV',
+      multiplier: 3,
+      eu: 120,
+      time: 5,
+    });
+
+    const input = addNode('inputNode');
+    state().onConnect({
+      source: input,
+      target: recipe,
+      sourceHandle: null,
+      targetHandle: inputId,
+    });
+    const output = addNode('outputNode');
+    state().onConnect({
+      source: recipe,
+      target: output,
+      sourceHandle: plateId,
+      targetHandle: null,
+    });
+    const disposal = addNode('disposalNode');
+    state().onConnect({
+      source: recipe,
+      target: disposal,
+      sourceHandle: slagId,
+      targetHandle: null,
+    });
+
+    return state();
+  };
+
+  it('aggregates leaf amounts scaled by the recipe multiplier', () => {
+    const { nodes, edges } = buildLine();
+    const metrics = lineMetrics(nodes, edges);
+
+    expect(metrics.inputs).toEqual([{ name: 'Ore', quantity: 6 }]);
+    expect(metrics.outputs).toEqual([{ name: 'Plate', quantity: 12 }]);
+    expect(metrics.disposals).toEqual([{ name: 'Slag', quantity: 3 }]);
+  });
+
+  it('lists machines with their voltage tier', () => {
+    const { nodes, edges } = buildLine();
+    expect(lineMetrics(nodes, edges).machines).toEqual([
+      { machine: 'EBF', voltage: 'MV', quantity: 1 },
+    ]);
+  });
+
+  it('reports critical-path time and peak demand', () => {
+    const { nodes, edges } = buildLine();
+    const metrics = lineMetrics(nodes, edges);
+
+    expect(metrics.time).toBe(15); // 5s × 3 runs
+    expect(metrics.demand).toBeCloseTo(1.2); // 120 EU / (5s × 20 ticks)
+  });
+
+  it('is empty for a graph with no nodes', () => {
+    expect(lineMetrics([], [])).toEqual({
+      inputs: [],
+      outputs: [],
+      disposals: [],
+      machines: [],
+      time: 0,
+      demand: 0,
     });
   });
 });

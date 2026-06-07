@@ -62,7 +62,11 @@ export const StatsPanel = () => {
         label="Machines"
         nodes={nodes}
         type="recipeNode"
-        groupBy={node => (node.type === 'recipeNode' ? node.data.machine : '')}
+        groupBy={node =>
+          node.type === 'recipeNode'
+            ? `${node.data.machine} (${node.data.voltage})`
+            : ''
+        }
         icon={
           <IconSettings size={16} color="var(--mantine-color-indigo-filled)" />
         }

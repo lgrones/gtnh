@@ -571,3 +571,74 @@ export const demandByTier = (
 
   return byTier;
 };
+
+// a named amount on a leaf node (input / output / disposal)
+export interface Entry {
+  name: string;
+  quantity: number;
+}
+
+// a machine entry for the alternatives comparison
+export interface MachineEntry {
+  machine: string;
+  quantity: number;
+  voltage: VoltageTier;
+}
+
+// the aggregate profile of a whole line, used to compare alternatives side by
+// side. leaf quantities are resolved through syncMirrors first (so they reflect
+// the recipes that feed/drain them); time + demand reuse lineEnergy.
+export interface LineMetrics {
+  inputs: Entry[];
+  outputs: Entry[];
+  disposals: Entry[];
+  machines: MachineEntry[];
+  time: number; // critical-path seconds
+  demand: number; // peak EU/t
+}
+
+export const lineMetrics = (
+  nodes: ProductionNode[],
+  edges: Edge[],
+): LineMetrics => {
+  const synced = syncMirrors(nodes, edges);
+
+  const inputs: Entry[] = [];
+  const outputs: Entry[] = [];
+  const disposals: Entry[] = [];
+  const machines: MachineEntry[] = [];
+
+  for (const node of synced) {
+    switch (node.type) {
+      case 'inputNode':
+        inputs.push({ name: node.data.name, quantity: node.data.quantity });
+        break;
+      case 'outputNode':
+        outputs.push({ name: node.data.name, quantity: node.data.quantity });
+        break;
+      case 'disposalNode':
+        disposals.push({ name: node.data.name, quantity: node.data.quantity });
+        break;
+      case 'recipeNode': {
+        const machine = machines.find(
+          x =>
+            x.machine === node.data.machine && x.voltage === node.data.voltage,
+        );
+
+        if (machine) machine.quantity++;
+        else
+          machines.push({
+            machine: node.data.machine,
+            quantity: 1,
+            voltage: node.data.voltage,
+          });
+
+        break;
+      }
+    }
+  }
+
+  const { time, demand } = lineEnergy(synced, edges);
+
+  return { inputs, outputs, disposals, machines, time, demand };
+};

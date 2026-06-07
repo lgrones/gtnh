@@ -49,8 +49,7 @@
   background-color: transparent;
 }
 
-.mantine-Input-input,
-.mantine-SegmentedControl-root {
+.mantine-Input-input {
   background-color: black;
   border: 1px solid var(--mantine-color-dark-7);
 }
@@ -58,4 +57,41 @@
 .mantine-InputWrapper-label {
   color: var(--mantine-color-dimmed);
   font-weight: 500;
+}
+
+.mantine-SegmentedControl-indicator {
+  translate: 0 -4px !important;
+  height: 100% !important;
+
+  ~ :last-of-type[data-active]::after {
+    content: '';
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    right: -4px;
+    width: 6px;
+    background-color: var(--mantine-color-dark-9);
+    border-top-right-radius: calc(
+      var(--sc-radius, var(--mantine-radius-default)) - 4px
+    );
+    border-bottom-right-radius: calc(
+      var(--sc-radius, var(--mantine-radius-default)) - 4px
+    );
+  }
+
+  ~ :first-of-type[data-active]::before {
+    content: '';
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    left: -4px;
+    width: 6px;
+    background-color: var(--mantine-color-dark-9);
+    border-top-left-radius: calc(
+      var(--sc-radius, var(--mantine-radius-default)) - 4px
+    );
+    border-bottom-left-radius: calc(
+      var(--sc-radius, var(--mantine-radius-default)) - 4px
+    );
+  }
 }

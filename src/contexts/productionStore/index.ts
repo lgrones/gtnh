@@ -27,11 +27,15 @@ export {
   layoutNodes,
   validateGraph,
   lineEnergy,
+  lineMetrics,
   demandByTier,
   recipePower,
   TICKS_PER_SECOND,
   type GraphIssue,
   type LineEnergy,
+  type LineMetrics,
+  type Entry as ItemAmount,
+  type MachineEntry,
   type TierDemand,
 } from './helpers';
 

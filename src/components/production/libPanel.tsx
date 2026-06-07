@@ -1,37 +1,41 @@
 import {
   ActionIcon,
+  Badge,
   Group,
   Paper,
   Stack,
   Text,
   TextInput,
+  Tooltip,
 } from '@mantine/core';
 import { modals } from '@mantine/modals';
 import { IconPlus, IconX } from '@tabler/icons-react';
 import { useShallow } from 'zustand/react/shallow';
 
 import {
+  useLines,
   useProductionLibrary,
-  type GraphMeta,
+  type Line,
 } from '@/contexts/productionLibrary';
 
-// one library row. the name input is uncontrolled (defaultValue) on purpose:
-// rename writes to Firestore and the new name only comes back a render later via
-// the snapshot, so a *controlled* value lags and resets the caret to the end on
-// every keystroke. letting the DOM own the value keeps the caret put; the row is
-// keyed by graph.id upstream, so it re-seeds defaultValue when the graph changes.
-const GraphRow = ({
-  graph,
+// one library row = one production line (a group of alternatives). the name
+// input is uncontrolled (defaultValue) on purpose: rename writes to Firestore
+// and the new name only comes back a render later via the snapshot, so a
+// *controlled* value lags and resets the caret on every keystroke. letting the
+// DOM own the value keeps the caret put; the row is keyed by groupId upstream,
+// so it re-seeds defaultValue when the line changes.
+const LineRow = ({
+  line,
   active,
   onSelect,
   onRename,
   onDelete,
 }: {
-  graph: GraphMeta;
+  line: Line;
   active: boolean;
-  onSelect: (id: string) => void;
-  onRename: (id: string, name: string) => void;
-  onDelete: (id: string) => void;
+  onSelect: (line: Line) => void;
+  onRename: (groupId: string, name: string) => void;
+  onDelete: (groupId: string) => void;
 }) => (
   <Group
     gap="xs"
@@ -43,11 +47,19 @@ const GraphRow = ({
     <TextInput
       flex={1}
       variant="unstyled"
-      defaultValue={graph.name}
-      onFocus={() => onSelect(graph.id)}
-      onChange={e => onRename(graph.id, e.currentTarget.value)}
+      defaultValue={line.name}
+      onFocus={() => onSelect(line)}
+      onChange={e => onRename(line.groupId, e.currentTarget.value)}
       styles={{ input: { backgroundColor: 'transparent', border: 'none' } }}
     />
+
+    {line.alternatives.length > 1 && (
+      <Tooltip label="Alternatives">
+        <Badge size="sm" variant="light" color="gray">
+          {line.alternatives.length}
+        </Badge>
+      </Tooltip>
+    )}
 
     <ActionIcon
       variant="subtle"
@@ -58,12 +70,16 @@ const GraphRow = ({
           title: 'Delete production line',
           children: (
             <Text size="sm">
-              You sure you wanna delete this production line?
+              You sure you wanna delete this production line
+              {line.alternatives.length > 1
+                ? ` and all ${line.alternatives.length} alternatives`
+                : ''}
+              ?
             </Text>
           ),
           labels: { confirm: 'Delete', cancel: 'Cancel' },
           confirmProps: { color: 'red' },
-          onConfirm: () => onDelete(graph.id),
+          onConfirm: () => onDelete(line.groupId),
         })
       }
     >
@@ -73,23 +89,22 @@ const GraphRow = ({
 );
 
 export const LibPanel = () => {
-  const {
-    graphs,
-    activeId,
-    createGraph,
-    selectGraph,
-    renameGraph,
-    removeGraph,
-  } = useProductionLibrary(
-    useShallow(state => ({
-      graphs: state.graphs,
-      activeId: state.activeId,
-      createGraph: state.createGraph,
-      selectGraph: state.selectGraph,
-      renameGraph: state.renameGraph,
-      removeGraph: state.removeGraph,
-    })),
-  );
+  const lines = useLines();
+  const { activeId, createGraph, selectGraph, renameLine, removeLine } =
+    useProductionLibrary(
+      useShallow(state => ({
+        activeId: state.activeId,
+        createGraph: state.createGraph,
+        selectGraph: state.selectGraph,
+        renameLine: state.renameLine,
+        removeLine: state.removeLine,
+      })),
+    );
+
+  // selecting a line opens its favorite-or-first alternative (alternatives are
+  // already sorted favorites-first)
+  const selectLine = (line: Line) =>
+    selectGraph(line.alternatives[0]?.id ?? '');
 
   return (
     <Paper
@@ -112,14 +127,14 @@ export const LibPanel = () => {
         </ActionIcon>
       </Group>
 
-      {graphs.map(graph => (
-        <GraphRow
-          key={graph.id}
-          graph={graph}
-          active={graph.id === activeId}
-          onSelect={selectGraph}
-          onRename={(id, name) => void renameGraph(id, name)}
-          onDelete={id => void removeGraph(id)}
+      {lines.map(line => (
+        <LineRow
+          key={line.groupId}
+          line={line}
+          active={line.alternatives.some(alt => alt.id === activeId)}
+          onSelect={selectLine}
+          onRename={(groupId, name) => void renameLine(groupId, name)}
+          onDelete={groupId => void removeLine(groupId)}
         />
       ))}
     </Paper>

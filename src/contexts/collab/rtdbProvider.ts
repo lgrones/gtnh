@@ -1,4 +1,5 @@
 import {
+  get,
   onChildAdded,
   onDisconnect,
   onValue,
@@ -6,6 +7,7 @@ import {
   ref,
   remove,
   set,
+  type DataSnapshot,
 } from 'firebase/database';
 import { fromBase64, toBase64 } from 'lib0/buffer';
 import * as Y from 'yjs';
@@ -64,20 +66,58 @@ export const createRtdbProvider = (
     detach.push(() => doc.off('update', onUpdate));
   }
 
-  // seed from the durable snapshot (already loaded by the library subscription),
-  // then attach to the live tail so subsequent edits stream in over RTDB
+  // seed from the durable snapshot (already loaded by the library subscription).
+  // the snapshot is authoritative; content is visible immediately on load.
   if (snapshot) applyEncoded(doc, snapshot, PROVIDER_ORIGIN);
+  onReady();
 
-  const off = onChildAdded(updatesRef, snap => {
+  // holder + getter so the async tail-init below reads the live value after
+  // `destroy` flips it across the awaits (a bare boolean would get narrowed away)
+  const session = { destroyed: false };
+  const isDestroyed = () => session.destroyed;
+
+  const applyTailUpdate = (snap: DataSnapshot) => {
     const val = snap.val() as { by: number; u: string } | null;
 
     if (!val || val.by === clientId) return; // skip our own pushes
 
     Y.applyUpdate(doc, fromBase64(val.u), PROVIDER_ORIGIN);
-  });
+  };
 
-  detach.push(off);
-  onReady();
+  // the live tail (live/{graphId}/updates) holds incremental edits not yet folded
+  // into the durable snapshot. on a SOLO open it is stale residue from a prior
+  // session — replaying it can resurrect a delete and wipe the freshly-loaded
+  // snapshot (content flashes in, then vanishes). so: when no other peer is
+  // present, drop the stale tail instead of replaying it (snapshot wins); with
+  // peers, replay to catch up to their live edits.
+  void (async () => {
+    let hasPeers = false;
+
+    try {
+      const peers = (await get(presenceRef)).val() as Record<
+        string,
+        unknown
+      > | null;
+      hasPeers = !!peers && Object.keys(peers).some(uid => uid !== self.uid);
+    } catch {
+      // presence read failed — keep the tail rather than risk dropping a real
+      // collaborator's edits
+      hasPeers = true;
+    }
+
+    if (isDestroyed()) return;
+
+    // solo editor: the tail is stale residue — compact it so it can't clobber
+    // the authoritative snapshot, now or on any future reload
+    if (!hasPeers && canWrite) await remove(updatesRef);
+
+    if (isDestroyed()) return;
+
+    // attach for the (remaining) tail + all future live updates. Yjs applies are
+    // idempotent, so re-seeing an already-applied update is a harmless no-op.
+    const off = onChildAdded(updatesRef, applyTailUpdate);
+    detach.push(off);
+  })();
 
   // presence: publish self, mirror peers into the presence store
   const publishSelf = (extra: Partial<Pick<Peer, 'cursor' | 'selection'>>) =>
@@ -105,6 +145,7 @@ export const createRtdbProvider = (
 
   return {
     destroy: () => {
+      session.destroyed = true; // stop the async tail-init if it's mid-flight
       for (const fn of detach) fn();
       void remove(selfRef);
       usePresence.setState({ peers: {} });
