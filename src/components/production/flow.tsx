@@ -7,7 +7,7 @@ import {
   Stack,
   Text,
 } from '@mantine/core';
-import { IconCheck, IconDeviceFloppy, IconPlus } from '@tabler/icons-react';
+import { IconPlus } from '@tabler/icons-react';
 import {
   Background,
   Controls as FlowControls,
@@ -19,7 +19,6 @@ import {
 } from '@xyflow/react';
 import {
   useCallback,
-  useEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -37,8 +36,10 @@ import {
   useProductionStore,
 } from '@/contexts/productionStore';
 
+import { AltTabs } from './altTabs';
 import { Controls } from './controls';
 import { Cursors } from './cursors';
+import { FlowOptions } from './flowOptions';
 import { nodeTypes } from './nodes/nodeTypes';
 
 export const Flow = () => {
@@ -65,47 +66,24 @@ export const Flow = () => {
 
   return (
     <ReactFlowProvider>
-      <FlowCanvas name={activeGraph.name} />
+      <FlowCanvas />
     </ReactFlowProvider>
   );
 };
 
 // the canvas body — lives inside ReactFlowProvider so it can project cursor
 // coordinates and read collab state for the active graph
-const FlowCanvas = ({ name }: { name: string }) => {
+const FlowCanvas = () => {
   const flowProps = useProductionFlow();
   const hasNodes = useProductionStore(state => state.nodes.length > 0);
 
-  const { status, save, setCursor } = useCollab(
-    useShallow(state => ({
-      status: state.status,
-      save: state.save,
-      setCursor: state.setCursor,
-    })),
+  const { status, setCursor } = useCollab(
+    useShallow(state => ({ status: state.status, setCursor: state.setCursor })),
   );
 
   const { screenToFlowPosition } = useReactFlow();
   const [menuOpened, setMenuOpened] = useState(false);
   const closeMenu = useCallback(() => setMenuOpened(false), []);
-
-  // save button feedback: spinner while compacting, then a brief "Saved" tick.
-  // `loading` disables the button, so overlapping clicks can't stack saves.
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>(
-    'idle',
-  );
-  const savedTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const handleSave = useCallback(async () => {
-    setSaveState('saving');
-    try {
-      await save();
-      setSaveState('saved');
-      clearTimeout(savedTimer.current);
-      savedTimer.current = setTimeout(() => setSaveState('idle'), 2000);
-    } catch {
-      setSaveState('idle');
-    }
-  }, [save]);
-  useEffect(() => () => clearTimeout(savedTimer.current), []);
 
   // throttle cursor broadcasts (~20/s) — presence is cheap but not free
   const lastMove = useRef(0);
@@ -149,29 +127,14 @@ const FlowCanvas = ({ name }: { name: string }) => {
         <Cursors />
 
         <Panel position="top-left">
-          <Group gap="xs">
-            <Text>{name}</Text>
+          <Group gap="xs" align="center">
+            <AltTabs />
             {status === 'loading' && <Loader size="xs" />}
           </Group>
         </Panel>
 
         <Panel position="top-right">
-          <Button
-            size="xs"
-            variant="default"
-            color={saveState === 'saved' ? 'green' : undefined}
-            loading={saveState === 'saving'}
-            leftSection={
-              saveState === 'saved' ? (
-                <IconCheck size={14} />
-              ) : (
-                <IconDeviceFloppy size={14} />
-              )
-            }
-            onClick={() => void handleSave()}
-          >
-            {saveState === 'saved' ? 'Saved' : 'Save'}
-          </Button>
+          <FlowOptions />
         </Panel>
 
         {!hasNodes && (

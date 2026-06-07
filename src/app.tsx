@@ -3,7 +3,7 @@ import '@mantine/nprogress/styles.css';
 import '@xyflow/react/dist/style.css';
 import './index.css';
 
-import { Group, MantineProvider, Paper } from '@mantine/core';
+import { Group, MantineProvider, Paper, Tooltip } from '@mantine/core';
 import { ModalsProvider } from '@mantine/modals';
 import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
@@ -25,6 +25,7 @@ const App = () => {
               defaultProps: { bg: 'dark.9', withBorder: true },
             }),
             Group: Group.extend({ defaultProps: { wrap: 'nowrap' } }),
+            Tooltip: Tooltip.extend({ defaultProps: { withArrow: true } }),
           },
         }}
       >

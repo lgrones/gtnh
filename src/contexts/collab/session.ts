@@ -9,7 +9,7 @@ import {
 import { useProductionStore } from '@/contexts/productionStore';
 
 import { bindStore, type Binding } from './binding';
-import { createGraphDoc, LOCAL_ORIGIN, type YjsGraph } from './doc';
+import { createGraphDoc, encodeDoc, LOCAL_ORIGIN, type YjsGraph } from './doc';
 import { saveSnapshot } from './persistence';
 import { colorForUid } from './presence';
 import { createRtdbProvider, type RtdbProvider } from './rtdbProvider';
@@ -22,6 +22,9 @@ interface CollabState {
   undo: () => void;
   redo: () => void;
   save: () => Promise<void>;
+  // base64 snapshot of the live doc, or null when no session is open. used to
+  // seed a new alternative from the current graph's freshest state.
+  getSnapshot: () => string | null;
   setCursor: (cursor: { x: number; y: number } | null) => void;
   setSelection: (ids: string[]) => void;
 }
@@ -41,6 +44,7 @@ export const useCollab = create<CollabState>()(() => ({
   undo: noop,
   redo: noop,
   save: asyncNoop,
+  getSnapshot: () => null,
   setCursor: noop,
   setSelection: noop,
 }));
@@ -52,9 +56,20 @@ interface Session {
   undoManager: Y.UndoManager;
   provider: RtdbProvider;
   disposeAutosave: () => void;
+  save: () => Promise<void>;
 }
 
 let current: Session | null = null;
+
+// persist the outgoing graph before it's torn down, so switching alternatives,
+// switching lines, or leaving the page never silently drops edits made since the
+// last autosave. encodeDoc runs synchronously inside saveSnapshot, so the bytes
+// are captured before teardown destroys the doc; the network write + compact
+// finish async (best-effort on page unload — the solo stale-tail drop on next
+// load is the backstop). no confirm dialog.
+const flushCurrent = () => {
+  if (current && useAuth.getState().user) void current.save();
+};
 
 // trailing debounce — collapse a burst of edits into one snapshot write
 const trailingDebounce = (fn: () => void, ms: number) => {
@@ -81,6 +96,7 @@ const teardown = () => {
 };
 
 const open = (graphId: string) => {
+  flushCurrent();
   teardown();
 
   const user = useAuth.getState().user;
@@ -144,6 +160,7 @@ const open = (graphId: string) => {
     canUndo: false,
     canRedo: false,
     save,
+    getSnapshot: () => encodeDoc(graph.doc),
     setCursor: cursor => provider.setPresence({ cursor }),
     setSelection: selection => provider.setPresence({ selection }),
   });
@@ -154,6 +171,7 @@ const open = (graphId: string) => {
     binding,
     undoManager,
     provider,
+    save,
     disposeAutosave: () => {
       autosave.cancel();
       graph.doc.off('update', onLocalUpdate);
@@ -162,6 +180,7 @@ const open = (graphId: string) => {
 };
 
 const close = () => {
+  flushCurrent();
   teardown();
   useProductionStore.getState().reset();
   useCollab.setState({
@@ -172,6 +191,7 @@ const close = () => {
     undo: noop,
     redo: noop,
     save: asyncNoop,
+    getSnapshot: () => null,
     setCursor: noop,
     setSelection: noop,
   });
@@ -200,5 +220,15 @@ useAuth.subscribe(() => {
     close();
   }
 });
+
+// best-effort persist when the tab is hidden/closed (no confirm dialog). pagehide
+// fires on close, navigation, and bfcache; visibilitychange→hidden covers mobile
+// tab-switch where pagehide may not fire.
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', flushCurrent);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushCurrent();
+  });
+}
 
 react();
