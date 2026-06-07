@@ -39,6 +39,7 @@ import {
 import { AltTabs } from './altTabs';
 import { Controls } from './controls';
 import { Cursors } from './cursors';
+import { edgeTypes } from './edges/edgeTypes';
 import { FlowOptions } from './flowOptions';
 import { nodeTypes } from './nodes/nodeTypes';
 
@@ -101,6 +102,7 @@ const FlowCanvas = () => {
       <ReactFlow
         {...flowProps}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         connectionRadius={60}
         deleteKeyCode={['Delete', 'Backspace']}
         nodesDraggable

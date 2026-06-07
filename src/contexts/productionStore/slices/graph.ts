@@ -27,6 +27,7 @@ type GraphSlice = Pick<
   | 'removeNode'
   | 'setNodes'
   | 'setEdges'
+  | 'setEdgePoints'
   | 'deselectAll'
 >;
 
@@ -94,6 +95,23 @@ export const createGraphSlice: SliceCreator<GraphSlice> = (set, get) => ({
 
   setNodes: nodes => set({ nodes }),
   setEdges: edges => set({ edges }),
+
+  // store manual bend points on an edge's data; an empty list clears routing so
+  // the edge falls back to its default path
+  setEdgePoints: (id, points) =>
+    set({
+      edges: get().edges.map(edge =>
+        edge.id === id
+          ? {
+              ...edge,
+              data: {
+                ...edge.data,
+                points: points.length > 0 ? points : undefined,
+              },
+            }
+          : edge,
+      ),
+    }),
 
   deselectAll: () =>
     set({

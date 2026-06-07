@@ -38,6 +38,17 @@ export const VOLTAGE_TIERS = [
 ] as const;
 export type VoltageTier = (typeof VOLTAGE_TIERS)[number];
 
+// a hand-placed bend point on an edge, in flow coordinates
+export interface Waypoint {
+  x: number;
+  y: number;
+}
+
+// edge payload: the user's manual routing waypoints (absent until they bend it)
+export interface EdgeData extends Record<string, unknown> {
+  points?: Waypoint[];
+}
+
 // one item slot of a recipe — used for both inputs and outputs
 export interface RecipeItem {
   id: string; // crypto.randomUUID()
@@ -110,6 +121,8 @@ export interface ProductionState {
   removeNode: (id: string) => void;
   setNodes: (nodes: ProductionNode[]) => void;
   setEdges: (edges: Edge[]) => void;
+  // replace an edge's manual routing waypoints (empty array clears them)
+  setEdgePoints: (id: string, points: Waypoint[]) => void;
   deselectAll: () => void;
 
   // copy/paste — clipboard holds clones of the last copied selection

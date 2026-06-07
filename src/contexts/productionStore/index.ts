@@ -11,6 +11,7 @@ export type {
   BaseNodeData,
   Clipboard,
   DisposalNodeData,
+  EdgeData,
   GeneratorSelection,
   InputNodeData,
   OutputNodeData,
@@ -21,6 +22,7 @@ export type {
   RecipeNodeData,
   SinkNodeData,
   VoltageTier,
+  Waypoint,
 } from './types';
 export { DRAG_HANDLE_CLASS, VOLTAGE_TIERS } from './types';
 export {

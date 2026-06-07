@@ -1,10 +1,6 @@
-import { Button, Group, Paper, Stack, Text } from '@mantine/core';
-import {
-  IconChecklist,
-  IconCircleCheck,
-  IconExclamationCircle,
-} from '@tabler/icons-react';
-import { useState } from 'react';
+import { Group, Paper, Stack, Text } from '@mantine/core';
+import { IconCircleCheck, IconExclamationCircle } from '@tabler/icons-react';
+import { useMemo } from 'react';
 
 import {
   useProductionStore,
@@ -16,23 +12,21 @@ export const IssuePanel = () => {
   const nodes = useProductionStore(state => state.nodes);
   const edges = useProductionStore(state => state.edges);
 
-  const [issues, setIssues] = useState<GraphIssue[] | null>(null);
+  // recompute live on every graph edit — validateGraph is cheap, no button
+  const issues = useMemo(() => validateGraph(nodes, edges), [nodes, edges]);
 
   return (
     <Paper h="100%" p="md" component={Stack} style={{ overflow: 'auto' }}>
-      <Text fw={600}>Issues</Text>
+      <Group justify="space-between">
+        <Text fw={600}>Issues</Text>
+        {issues.length > 0 && (
+          <Text size="sm" c="dimmed">
+            {issues.length}
+          </Text>
+        )}
+      </Group>
 
-      <Button
-        variant="filled"
-        color="gray.9"
-        leftSection={<IconChecklist size={16} />}
-        onClick={() => setIssues(validateGraph(nodes, edges))}
-        style={{ flexShrink: 0 }}
-      >
-        Validate
-      </Button>
-
-      {issues !== null && <Validation issues={issues} />}
+      <Validation issues={issues} />
     </Paper>
   );
 };
@@ -45,6 +39,10 @@ const issueLabel = (issue: GraphIssue) => {
       return `${(issue.supply ?? 0) - (issue.demand ?? 0)} unused, no sink`;
     case 'unfed':
       return 'no source';
+    case 'incomplete':
+      return 'not set';
+    case 'mismatch':
+      return 'connected item names differ';
   }
 };
 

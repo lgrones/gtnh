@@ -42,6 +42,11 @@ const addInput = (recipe: string) => {
   return inputs[inputs.length - 1]!.id;
 };
 
+// fill the fields validateGraph's `incomplete` check requires (name defaults to
+// a non-empty value already), so balance-only tests stay clean
+const completeRecipe = (recipe: string) =>
+  state().updateRecipe(recipe, { eu: 30, time: 5 });
+
 beforeEach(() => {
   vi.useFakeTimers();
   store.setState({ nodes: [], edges: [], generator: null });
@@ -652,6 +657,8 @@ describe('validateGraph', () => {
       sourceHandle: outId,
       targetHandle: inId,
     });
+    completeRecipe(a);
+    completeRecipe(b);
 
     expect(validateGraph(state().nodes, state().edges)).toEqual([]);
   });
@@ -753,6 +760,95 @@ describe('validateGraph', () => {
   });
 });
 
+describe('validateGraph — incomplete recipe fields', () => {
+  it('flags a recipe missing energy and duration', () => {
+    const id = addNode('recipeNode'); // defaults: eu 0, time 0, name "Recipe"
+    const issues = validateGraph(state().nodes, state().edges);
+
+    expect(issues).toContainEqual(
+      expect.objectContaining({ kind: 'incomplete', item: 'energy (EU)' }),
+    );
+    expect(issues).toContainEqual(
+      expect.objectContaining({ kind: 'incomplete', item: 'duration' }),
+    );
+    // name defaults to "Recipe", so no name issue
+    expect(issues.some(i => i.kind === 'incomplete' && i.item === 'name')).toBe(
+      false,
+    );
+    expect(recipeData(id).name).toBe('Recipe');
+  });
+
+  it('flags a blank recipe name and labels the issue "Unnamed recipe"', () => {
+    const id = addNode('recipeNode');
+    state().renameNode(id, '   ');
+    completeRecipe(id);
+
+    expect(validateGraph(state().nodes, state().edges)).toContainEqual(
+      expect.objectContaining({
+        kind: 'incomplete',
+        item: 'name',
+        recipe: 'Unnamed recipe',
+      }),
+    );
+  });
+
+  it('raises no incomplete issue once name, energy and duration are set', () => {
+    const id = addNode('recipeNode');
+    state().renameNode(id, 'Smelter');
+    completeRecipe(id);
+
+    expect(
+      validateGraph(state().nodes, state().edges).filter(
+        i => i.kind === 'incomplete',
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('validateGraph — renamed recipe link', () => {
+  // wire output "Ore" -> input "Ore" between two recipes, return their ids + handles
+  const wireMatched = () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 4 });
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 4 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+    return { a, outId, b, inId };
+  };
+
+  it('keeps the edge when a renamed input no longer matches', () => {
+    const { inId, b } = wireMatched();
+    state().updateRecipeInput(b, inId, { name: 'Dust' });
+    // edge is NOT yanked mid-edit
+    expect(state().edges).toHaveLength(1);
+  });
+
+  it('flags the now-disagreeing edge as a mismatch', () => {
+    const { inId, b } = wireMatched();
+    state().updateRecipeInput(b, inId, { name: 'Dust' });
+
+    expect(validateGraph(state().nodes, state().edges)).toContainEqual(
+      expect.objectContaining({ kind: 'mismatch' }),
+    );
+  });
+
+  it('raises no mismatch while the names still agree', () => {
+    wireMatched();
+    expect(
+      validateGraph(state().nodes, state().edges).some(
+        i => i.kind === 'mismatch',
+      ),
+    ).toBe(false);
+  });
+});
+
 describe('recipe multiplier', () => {
   const leafData = (id: string) =>
     state().nodes.find(n => n.id === id)!.data as SinkNodeData;
@@ -780,6 +876,8 @@ describe('recipe multiplier', () => {
 
     // run the producer twice -> supply 2, balanced
     state().updateRecipe(a, { multiplier: 2 });
+    completeRecipe(a);
+    completeRecipe(b);
     expect(validateGraph(state().nodes, state().edges)).toEqual([]);
   });
 
