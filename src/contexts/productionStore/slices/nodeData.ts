@@ -1,8 +1,12 @@
 import { mapRecipe, syncMirrors } from '../helpers';
 import {
+  type BaseRecipeNodeData,
+  type EnergyHatch,
   type ProductionNode,
   type ProductionState,
+  type RecipeKind,
   type SliceCreator,
+  type VoltageTier,
 } from '../types';
 
 type NodeDataSlice = Pick<
@@ -95,12 +99,37 @@ export const createNodeDataSlice: SliceCreator<NodeDataSlice> = (set, get) => ({
   },
 
   // scalar recipe fields — `multiplier` scales effective I/O, so connected sink
-  // and input leaves must re-sync; the others are no-ops for mirrors but cheap
+  // and input leaves must re-sync; the others are no-ops for mirrors but cheap.
+  // switching machine shape swaps the power fields over rather than keeping both
   updateRecipe: (nodeId, patch) => {
-    const nodes = mapRecipe(get().nodes, nodeId, data => ({
-      ...data,
-      ...patch,
-    }));
+    const nodes = mapRecipe(get().nodes, nodeId, data => {
+      // widened over both arms so the other shape's fields can be dropped
+      // without a cast — narrowing back to the union happens on the way out
+      const merged: BaseRecipeNodeData & {
+        kind: RecipeKind;
+        voltage?: VoltageTier;
+        hatches?: EnergyHatch[];
+        overclock?: 'imperfect' | 'perfect';
+        parallels?: number;
+      } = { ...data, ...patch };
+
+      if (merged.kind === 'multi') {
+        // carry a singleblock's tier over as one hatch group, so switching
+        // shape keeps the machine roughly where the user had it
+        const hatches = merged.hatches ?? [
+          { tier: merged.voltage ?? 'LV', count: 1 },
+        ];
+        delete merged.voltage;
+        return { ...merged, kind: 'multi', hatches };
+      }
+
+      const voltage = merged.voltage ?? merged.hatches?.[0]?.tier ?? 'LV';
+      // hatches, parallels and the overclock choice belong to multiblocks only
+      delete merged.hatches;
+      delete merged.parallels;
+      delete merged.overclock;
+      return { ...merged, kind: 'single', voltage };
+    });
     set({ nodes: syncMirrors(nodes, get().edges) });
   },
 });

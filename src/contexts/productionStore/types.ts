@@ -70,15 +70,66 @@ export type InputNodeData = SinkNodeData;
 export type OutputNodeData = SinkNodeData;
 export type DisposalNodeData = SinkNodeData;
 
-export interface RecipeNodeData extends BaseNodeData {
-  machine: string; // free-text machine name
+// which of the two machine shapes a recipe node represents. singleblocks keep
+// the original free-text/no-overclock behaviour; multiblocks pick their machine
+// from the catalog (@/domain/multiblocks) and overclock against their hatches
+export type RecipeKind = 'single' | 'multi';
+
+// one group of identical energy hatches feeding a multiblock. the common case is
+// a single group ("2 HV hatches"); a list only to allow the rare mixed-tier build
+export interface EnergyHatch {
+  tier: VoltageTier;
+  count: number;
+}
+
+// the fields both machine shapes share. how each is FED differs — a singleblock
+// by its own tier, a multiblock by its energy hatches — so those live on their
+// respective arms. `amperage` is shared because it describes the RECIPE, not the
+// machine; conflating it with hatch count caused a lot of confusion
+export interface BaseRecipeNodeData extends BaseNodeData {
+  machine: string; // free text for singleblocks, a catalog name for multiblocks
   inputs: RecipeItem[];
   outputs: RecipeItem[];
-  voltage: VoltageTier; // electric tier
-  amperage: number; // electric amps
-  multiplier: number; // parallel/batch run count — scales effective I/O
-  eu: number; // total EU consumed by one run of the recipe
-  time: number; // processing time of one run, in seconds
+  multiplier: number; // sequential run count — scales effective I/O and time
+  eu: number; // total EU consumed by one run of the recipe, before overclocking
+  time: number; // processing time of one run, in seconds, before overclocking
+  // amps the RECIPE itself draws — multiblock recipes have these too (the
+  // Industrial Arc Furnace needs 3A for some of them). used for generator
+  // sizing; it is a delivery requirement, never an overclock input
+  amperage: number;
+}
+
+export interface SingleblockRecipeData extends BaseRecipeNodeData {
+  kind: 'single';
+  voltage: VoltageTier; // the machine's own tier — what it overclocks against
+}
+
+export interface MultiblockRecipeData extends BaseRecipeNodeData {
+  kind: 'multi';
+  hatches: EnergyHatch[]; // what feeds it — their summed EU/t is its supply
+  // only meaningful for catalog entries classed `mixed`, which can overclock
+  // either way; ignored for every other machine. defaults to imperfect
+  overclock?: 'imperfect' | 'perfect';
+  // concurrent recipes the machine offers. the wiki tabulates no per-machine
+  // figure, so it is entered per node; absent means 1. only as many as the
+  // supplied power can pay for actually run
+  parallels?: number;
+}
+
+export type RecipeNodeData = SingleblockRecipeData | MultiblockRecipeData;
+
+// the scalar fields `updateRecipe` may patch. spelled out rather than Pick'd off
+// the union, since `overclock` and `kind` exist on only one arm of it
+export interface RecipeFields extends Pick<
+  BaseRecipeNodeData,
+  'machine' | 'multiplier' | 'eu' | 'time'
+> {
+  kind: RecipeKind;
+  voltage: VoltageTier;
+  amperage: number;
+  hatches: EnergyHatch[];
+  overclock?: 'imperfect' | 'perfect';
+  parallels?: number;
 }
 
 // node typed per variant so data matches the node `type`
@@ -159,15 +210,7 @@ export interface ProductionState {
   ) => void;
   removeRecipeInput: (nodeId: string, itemId: string) => void;
   removeRecipeOutput: (nodeId: string, itemId: string) => void;
-  updateRecipe: (
-    nodeId: string,
-    patch: Partial<
-      Pick<
-        RecipeNodeData,
-        'machine' | 'voltage' | 'amperage' | 'multiplier' | 'eu' | 'time'
-      >
-    >,
-  ) => void;
+  updateRecipe: (nodeId: string, patch: Partial<RecipeFields>) => void;
 }
 
 // a slice contributes part of the store; it gets the full store's set/get so

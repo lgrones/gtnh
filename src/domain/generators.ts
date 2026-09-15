@@ -4,24 +4,9 @@ import {
   type VoltageTier,
 } from '@/contexts/productionStore';
 
-// EU/t carried by 1A at each GregTech voltage tier. Singleblock generators
-// always output exactly 1A at their rated tier, so this is their gross output.
-export const TIER_EU: Record<VoltageTier, number> = {
-  LV: 32,
-  MV: 128,
-  HV: 512,
-  EV: 2048,
-  IV: 8192,
-  LuV: 32768,
-  ZPM: 131072,
-  UV: 524288,
-  UHV: 2097152,
-  UEV: 8388608,
-  UIV: 33554432,
-  UMV: 134217728,
-  UXV: 536870912,
-  MAX: 2147483648,
-};
+import { TIER_EU } from './tiers';
+
+export { TIER_EU };
 
 // a single fuel and how much energy one unit holds (in `unit`s of the category)
 export interface Fuel {

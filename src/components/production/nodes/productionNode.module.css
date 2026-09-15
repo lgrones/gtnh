@@ -113,3 +113,29 @@
     transform: rotate(360deg);
   }
 }
+
+/* the switch sits among the node's inputs, so it borrows their surface: the
+   same black ground and dark-7 hairline as `.mantine-Input-input`, with the
+   active pill one step lighter so it reads as raised rather than coloured */
+.kind-root {
+  --sc-color: var(--mantine-color-dark-6);
+
+  background-color: black;
+  border: 1px solid var(--mantine-color-dark-7);
+  padding: 3px;
+}
+
+/* react flow scales its viewport with a css transform. mantine's segmented
+   control positions its floating indicator from getBoundingClientRect deltas —
+   screen px — and writes them back as unscaled css px, so at any zoom but 1 the
+   pill lands at zoom² of the right offset and size. mantine also renders a
+   plain ::before pill on the active label, which it only hides once the
+   indicator has initialized; that one needs no measuring, so keep it and drop
+   the indicator instead */
+.kind-indicator {
+  display: none;
+}
+
+.kind-root[data-initialized] .kind-label[data-active]::before {
+  display: block;
+}

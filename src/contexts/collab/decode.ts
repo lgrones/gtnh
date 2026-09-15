@@ -1,6 +1,9 @@
 import { type Edge } from '@xyflow/react';
 
-import { type ProductionNode } from '@/contexts/productionStore';
+import {
+  normalizeNodes,
+  type ProductionNode,
+} from '@/contexts/productionStore';
 
 import { applyEncoded, createGraphDoc } from './doc';
 
@@ -21,7 +24,9 @@ export const decodeGraph = (
     applyEncoded(graph.doc, snapshot);
 
     return {
-      nodes: [...graph.nodes.values()],
+      // same backfill the live path applies — a cached snapshot can predate a
+      // field just as easily as the active graph can
+      nodes: normalizeNodes([...graph.nodes.values()]),
       edges: [...graph.edges.values()],
     };
   } finally {

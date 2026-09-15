@@ -6,11 +6,17 @@ import { type Connection, type Edge } from '@xyflow/react';
 // only elkjs reference the dynamic import() in getElk below.
 type ElkNode = import('elkjs/lib/elk.bundled.js').ElkNode;
 
+import { findMultiblock } from '@/domain/multiblocks';
+import { hatchPower, overclock } from '@/domain/overclock';
+import { TICKS_PER_SECOND, TIER_EU } from '@/domain/tiers';
+
 import {
   DRAG_HANDLE_CLASS,
   type ProductionNode,
   type ProductionNodeType,
+  type EnergyHatch,
   type RecipeItem,
+  type RecipeKind,
   type RecipeNodeData,
   type VoltageTier,
 } from './types';
@@ -80,6 +86,7 @@ export const createNode = (
         type,
         data: {
           name: 'Recipe',
+          kind: 'single',
           machine: '',
           inputs: [],
           outputs: [],
@@ -100,22 +107,101 @@ export const createNode = (
 };
 
 // backfill fields added after some graphs were already persisted — `multiplier`,
-// `eu` and `time` are absent from recipe nodes saved before they existed; default
-// them on load so older lines keep working
+// `eu`, `time` and `kind` are absent from recipe nodes saved before they existed;
+// default them on load so older lines keep working. every pre-existing recipe was
+// a singleblock, which is also the no-overclock behaviour, so that default is safe.
+// fields are listed explicitly so a node switched between machine shapes cannot
+// carry the other shape's leftovers around
+// every field either machine shape has ever persisted, all optional. spelled out
+// rather than derived from the two arms: `Omit`/`Pick` over a type carrying a
+// `Record<string, unknown>` index signature throws the named properties away
+interface PersistedRecipe {
+  name?: string;
+  machine?: string;
+  inputs?: RecipeItem[];
+  outputs?: RecipeItem[];
+  multiplier?: number;
+  eu?: number;
+  time?: number;
+  kind?: RecipeKind;
+  voltage?: VoltageTier;
+  amperage?: number;
+  hatches?: EnergyHatch[];
+  overclock?: 'imperfect' | 'perfect';
+  parallels?: number;
+}
+
+// whether a persisted recipe is missing anything, or still carries fields from
+// the machine shape it is no longer. checked first so an already-current node is
+// returned by identity — this runs on every remote collab update, and handing
+// back fresh `data` objects each time would re-render the whole canvas
+const needsBackfill = (data: PersistedRecipe): boolean =>
+  data.kind === undefined ||
+  data.multiplier === undefined ||
+  data.eu === undefined ||
+  data.time === undefined ||
+  data.amperage === undefined ||
+  (data.kind === 'multi'
+    ? data.hatches === undefined || data.voltage !== undefined
+    : data.voltage === undefined || data.hatches !== undefined);
+
 export const normalizeNodes = (nodes: ProductionNode[]): ProductionNode[] =>
   nodes.map(node => {
     if (node.type !== 'recipeNode') return node;
-    const data = node.data as Partial<RecipeNodeData>;
+    const data = node.data as PersistedRecipe;
+    if (!needsBackfill(data)) return node;
+
+    const shared = {
+      name: data.name ?? 'Recipe',
+      machine: data.machine ?? '',
+      inputs: data.inputs ?? [],
+      outputs: data.outputs ?? [],
+      multiplier: data.multiplier ?? 1,
+      eu: data.eu ?? 0,
+      time: data.time ?? 0,
+      amperage: data.amperage ?? 1,
+    };
+
     return {
       ...node,
-      data: {
-        ...node.data,
-        multiplier: data.multiplier ?? 1,
-        eu: data.eu ?? 0,
-        time: data.time ?? 0,
-      },
+      data:
+        data.kind === 'multi'
+          ? {
+              ...shared,
+              kind: 'multi' as const,
+              // a multiblock saved before hatches existed described its supply
+              // as a tier plus an amp count, which is one hatch group
+              hatches: data.hatches ?? [
+                { tier: data.voltage ?? 'LV', count: 1 },
+              ],
+              overclock: data.overclock,
+              parallels: data.parallels,
+            }
+          : {
+              ...shared,
+              kind: 'single' as const,
+              voltage: data.voltage ?? 'LV',
+            },
     };
   });
+
+// the tier a machine is represented by in per-tier groupings. a multiblock can
+// in principle be fed by mixed hatches, in which case its highest tier stands
+// for it
+export const machineTier = (data: RecipeNodeData): VoltageTier =>
+  data.kind === 'single'
+    ? data.voltage
+    : (data.hatches.reduce<VoltageTier | undefined>(
+        (best, hatch) =>
+          best === undefined || TIER_EU[hatch.tier] > TIER_EU[best]
+            ? hatch.tier
+            : best,
+        undefined,
+      ) ?? 'LV');
+
+// amps the recipe draws. shared by both machine shapes — a multiblock recipe can
+// require several amps just as a singleblock one can
+export const machineAmps = (data: RecipeNodeData): number => data.amperage;
 
 // fallback node size when React Flow hasn't measured a node yet
 const DEFAULT_NODE_SIZE = { width: 280, height: 160 };
@@ -216,29 +302,36 @@ export const SINK_TYPES = new Set<ProductionNodeType>([
   'disposalNode',
 ]);
 
+// how many times over a recipe's listed item quantities actually move per pass:
+// its sequential cycles times the concurrent recipes its machine runs. parallels
+// raise throughput without lengthening the cycle, so they scale I/O exactly as
+// the cycle count does
+export const recipeScale = (data: RecipeNodeData): number =>
+  data.multiplier * overclock(data).parallels;
+
 // `${recipeId}:${itemId}` -> recipe item, indexed for both inputs and outputs,
-// plus each recipe's run multiplier keyed by node id
+// plus each recipe's item scale (cycles x parallels) keyed by node id
 interface ItemIndex {
   outputs: Map<string, RecipeItem>;
   inputs: Map<string, RecipeItem>;
-  multipliers: Map<string, number>;
+  scales: Map<string, number>;
 }
 
 const indexRecipeItems = (nodes: ProductionNode[]): ItemIndex => {
   const outputs = new Map<string, RecipeItem>();
   const inputs = new Map<string, RecipeItem>();
-  const multipliers = new Map<string, number>();
+  const scales = new Map<string, number>();
 
   for (const node of nodes) {
     if (node.type !== 'recipeNode') continue;
-    multipliers.set(node.id, node.data.multiplier);
+    scales.set(node.id, recipeScale(node.data));
     for (const output of node.data.outputs)
       outputs.set(`${node.id}:${output.id}`, output);
     for (const input of node.data.inputs)
       inputs.set(`${node.id}:${input.id}`, input);
   }
 
-  return { outputs, inputs, multipliers };
+  return { outputs, inputs, scales };
 };
 
 // look up a recipe item by node + handle id; undefined for leaf nodes /
@@ -262,8 +355,8 @@ const demandByOutput = (
     if (!edge.sourceHandle || !edge.targetHandle) continue;
     const input = recipeItem(index, edge.target, edge.targetHandle, 'inputs');
     if (input === undefined) continue;
-    // scale by the consuming recipe's run count
-    const runs = index.multipliers.get(edge.target) ?? 1;
+    // scale by the consuming recipe's cycles and parallels
+    const runs = index.scales.get(edge.target) ?? 1;
     const key = `${edge.source}:${edge.sourceHandle}`;
     demand.set(key, (demand.get(key) ?? 0) + input.quantity * runs);
   }
@@ -346,8 +439,7 @@ export const syncMirrors = (
         'outputs',
       );
       if (output !== undefined) {
-        const supply =
-          output.quantity * (index.multipliers.get(edge.source) ?? 1);
+        const supply = output.quantity * (index.scales.get(edge.source) ?? 1);
         mirrors.set(edge.target, {
           name: output.name,
           quantity:
@@ -361,7 +453,7 @@ export const syncMirrors = (
       if (input !== undefined)
         mirrors.set(edge.source, {
           name: input.name,
-          quantity: input.quantity * (index.multipliers.get(edge.target) ?? 1),
+          quantity: input.quantity * (index.scales.get(edge.target) ?? 1),
         });
     }
   }
@@ -383,9 +475,20 @@ export const syncMirrors = (
 export interface GraphIssue {
   recipe: string; // recipe node display name (receiver for deficit, else owner)
   item: string; // item name (or the missing field, for `incomplete`)
-  kind: 'deficit' | 'surplus' | 'unfed' | 'incomplete' | 'mismatch';
-  supply?: number; // deficit/surplus — the output's quantity
-  demand?: number; // deficit/surplus — total downstream recipe demand
+  kind:
+    | 'deficit'
+    | 'surplus'
+    | 'unfed'
+    | 'incomplete'
+    | 'mismatch'
+    | 'underpowered'
+    | 'throttled'
+    | 'overparallel'
+    | 'unmodeled';
+  // deficit/surplus: the output's quantity and the demand on it
+  // overparallel: the parallels actually running and the ones entered
+  supply?: number;
+  demand?: number;
 }
 
 // recipe fields that must be filled for the line to be computable, paired with
@@ -398,6 +501,62 @@ const REQUIRED_RECIPE_FIELDS: {
   { label: 'energy (EU)', missing: data => data.eu <= 0 },
   { label: 'duration', missing: data => data.time <= 0 },
 ];
+
+// overclock problems on a multiblock node. singleblocks never overclock, so they
+// produce nothing here
+const overclockIssues = (data: RecipeNodeData): GraphIssue[] => {
+  const recipe = data.name.trim() === '' ? 'Unnamed recipe' : data.name;
+  const result = overclock(data);
+  const issues: GraphIssue[] = [];
+
+  if (result.underpowered)
+    issues.push({
+      recipe,
+      item: `${result.supplied} supplied, ${result.recipe} required`,
+      kind: 'underpowered',
+    });
+
+  // more parallels entered than the hatches can power. the metrics silently
+  // run the affordable count, so without this the typo leaves no trace. an
+  // underpowered node reports that instead, and a machine whose overclock is
+  // not modelled never runs parallels at all
+  if (
+    !result.underpowered &&
+    result.power > 0 &&
+    result.mode !== 'none' &&
+    result.mode !== 'unique' &&
+    result.parallels < result.offeredParallels
+  )
+    issues.push({
+      recipe,
+      item: 'parallels',
+      kind: 'overparallel',
+      supply: result.parallels,
+      demand: result.offeredParallels,
+    });
+
+  // steps the machine had the power for but nothing to spend them on: the
+  // recipe is at the 1 tick floor and the parallels entered on the node are
+  // already running, so the extra tier buys nothing
+  if (result.surplus > 0)
+    issues.push({
+      recipe,
+      item: `${result.surplus} overclock${result.surplus > 1 ? 's' : ''}`,
+      kind: 'throttled',
+    });
+
+  if (
+    data.kind === 'multi' &&
+    (result.mode === 'unique' || findMultiblock(data.machine) === undefined)
+  )
+    issues.push({
+      recipe,
+      item: data.machine === '' ? 'machine' : data.machine,
+      kind: 'unmodeled',
+    });
+
+  return issues;
+};
 
 // check quantity balance between recipes:
 //   - deficit: a recipe output feeds downstream recipes that demand more than
@@ -469,11 +628,13 @@ export const validateGraph = (
           kind: 'incomplete',
         });
 
+    for (const issue of overclockIssues(node.data)) issues.push(issue);
+
     for (const output of node.data.outputs) {
       const key = `${node.id}:${output.id}`;
       const needed = demand.get(key) ?? 0;
       // produced over all runs of this recipe
-      const supply = output.quantity * node.data.multiplier;
+      const supply = output.quantity * recipeScale(node.data);
 
       if (needed > supply)
         // deficit — blame each receiving recipe
@@ -508,17 +669,17 @@ export const validateGraph = (
   return issues;
 };
 
-export const TICKS_PER_SECOND = 20;
+export { TICKS_PER_SECOND };
 
-// a recipe's instantaneous power draw (EU/t) = total EU over its tick duration.
-// `multiplier` (sequential run count) scales TIME, not power — one machine still
-// runs a single cycle at a time — so it is intentionally absent here
+// a recipe's instantaneous power draw (EU/t), after any overclock its machine
+// achieves. `multiplier` (sequential run count) scales TIME, not power — one
+// machine still runs a single cycle at a time — so it is intentionally absent
 export const recipePower = (data: RecipeNodeData): number =>
-  data.time > 0 ? data.eu / (data.time * TICKS_PER_SECOND) : 0;
+  overclock(data).power;
 
-// a recipe node's wall-clock time: one cycle's seconds × its sequential runs
+// a recipe node's wall-clock time: one overclocked cycle × its sequential runs
 const recipeTime = (data: RecipeNodeData): number =>
-  data.time * data.multiplier;
+  overclock(data).time * data.multiplier;
 
 export interface LineEnergy {
   demand: number; // peak power draw (EU/t) — all recipes assumed concurrent
@@ -595,15 +756,32 @@ export const demandByTier = (
 ): Map<VoltageTier, TierDemand> => {
   const byTier = new Map<VoltageTier, TierDemand>();
 
+  const add = (tier: VoltageTier, power: number, amps: number) => {
+    const current = byTier.get(tier) ?? { power: 0, amps: 0 };
+    current.power += power;
+    current.amps = Math.max(current.amps, amps);
+    byTier.set(tier, current);
+  };
+
   for (const node of nodes) {
     if (node.type !== 'recipeNode') continue;
     const power = recipePower(node.data);
     if (power <= 0) continue;
 
-    const current = byTier.get(node.data.voltage) ?? { power: 0, amps: 0 };
-    current.power += power;
-    current.amps = Math.max(current.amps, node.data.amperage);
-    byTier.set(node.data.voltage, current);
+    if (node.data.kind === 'single') {
+      add(node.data.voltage, power, node.data.amperage);
+      continue;
+    }
+
+    // a multiblock draws through its hatches, so each tier carries the share of
+    // the load its own hatches can deliver
+    const total = hatchPower(node.data.hatches);
+    for (const hatch of node.data.hatches)
+      add(
+        hatch.tier,
+        total > 0 ? power * ((TIER_EU[hatch.tier] * hatch.count) / total) : 0,
+        node.data.amperage,
+      );
   }
 
   return byTier;
@@ -659,7 +837,8 @@ export const lineMetrics = (
       case 'recipeNode': {
         const machine = machines.find(
           x =>
-            x.machine === node.data.machine && x.voltage === node.data.voltage,
+            x.machine === node.data.machine &&
+            x.voltage === machineTier(node.data),
         );
 
         if (machine) machine.quantity++;
@@ -667,7 +846,7 @@ export const lineMetrics = (
           machines.push({
             machine: node.data.machine,
             quantity: 1,
-            voltage: node.data.voltage,
+            voltage: machineTier(node.data),
           });
 
         break;

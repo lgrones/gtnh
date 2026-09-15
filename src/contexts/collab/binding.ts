@@ -1,6 +1,7 @@
 import { type Edge } from '@xyflow/react';
 
 import {
+  normalizeNodes,
   useProductionStore,
   type GeneratorSelection,
   type ProductionNode,
@@ -51,7 +52,9 @@ export const bindStore = (graph: YjsGraph): Binding => {
     });
 
     applyingRemote = true;
-    useProductionStore.setState({ nodes, edges });
+    // graphs persisted before a field existed arrive raw from the doc, so they
+    // are backfilled here as well as in `reset` — this is the live path
+    useProductionStore.setState({ nodes: normalizeNodes(nodes), edges });
     applyingRemote = false;
   };
 

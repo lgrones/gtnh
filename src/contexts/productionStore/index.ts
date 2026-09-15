@@ -9,17 +9,23 @@ import { type ProductionState } from './types';
 
 export type {
   BaseNodeData,
+  BaseRecipeNodeData,
   Clipboard,
   DisposalNodeData,
   EdgeData,
+  EnergyHatch,
   GeneratorSelection,
   InputNodeData,
+  MultiblockRecipeData,
   OutputNodeData,
   ProductionNode,
   ProductionNodeType,
   ProductionState,
+  RecipeFields,
   RecipeItem,
+  RecipeKind,
   RecipeNodeData,
+  SingleblockRecipeData,
   SinkNodeData,
   VoltageTier,
   Waypoint,
@@ -27,6 +33,9 @@ export type {
 export { DRAG_HANDLE_CLASS, VOLTAGE_TIERS } from './types';
 export {
   layoutNodes,
+  machineAmps,
+  machineTier,
+  normalizeNodes,
   validateGraph,
   lineEnergy,
   lineMetrics,

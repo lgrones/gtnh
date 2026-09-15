@@ -1,9 +1,14 @@
 import type { Edge } from '@xyflow/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { overclock } from '@/domain/overclock';
+
 import {
   layoutNodes,
   lineEnergy,
+  machineAmps,
+  machineTier,
+  normalizeNodes,
   lineMetrics,
   demandByTier,
   recipePower,
@@ -961,10 +966,11 @@ describe('lineEnergy', () => {
     const a = addNode('recipeNode');
     state().updateRecipe(a, { eu: 6400, time: 16, multiplier: 3 }); // 20 EU/t
     const b = addNode('recipeNode');
-    state().updateRecipe(b, { eu: 1280, time: 16 }); // 4 EU/t
+    state().updateRecipe(b, { eu: 3200, time: 16 }); // 10 EU/t
 
-    // multiplier scales time, not instantaneous draw -> 24 EU/t total
-    expect(lineEnergy(state().nodes, state().edges).demand).toBe(24);
+    // both sit at LV, their machines' tier, so neither overclocks here
+    // multiplier scales time, not instantaneous draw -> 30 EU/t total
+    expect(lineEnergy(state().nodes, state().edges).demand).toBe(30);
   });
 
   it('takes the critical path as total time, scaled by multiplier', () => {
@@ -1000,17 +1006,28 @@ describe('lineEnergy', () => {
 
 describe('demandByTier', () => {
   it('sums power but takes the peak single-machine amperage per tier', () => {
+    // each recipe sits at its own machine's tier, so none of them overclock
     const a = addNode('recipeNode');
-    state().updateRecipe(a, { eu: 6400, time: 16, voltage: 'MV', amperage: 2 }); // 20 EU/t
+    state().updateRecipe(a, {
+      eu: 12800,
+      time: 16,
+      voltage: 'MV',
+      amperage: 2,
+    }); // 40 EU/t
     const b = addNode('recipeNode');
-    state().updateRecipe(b, { eu: 1280, time: 16, voltage: 'MV', amperage: 1 }); // 4 EU/t
+    state().updateRecipe(b, {
+      eu: 11520,
+      time: 16,
+      voltage: 'MV',
+      amperage: 1,
+    }); // 36 EU/t
     const c = addNode('recipeNode');
-    state().updateRecipe(c, { eu: 320, time: 16, voltage: 'LV', amperage: 1 }); // 1 EU/t
+    state().updateRecipe(c, { eu: 5120, time: 16, voltage: 'LV', amperage: 1 }); // 16 EU/t
 
     const byTier = demandByTier(state().nodes);
-    // MV power summed (24), but amps is the max of the two machines (2), not 3
-    expect(byTier.get('MV')).toEqual({ power: 24, amps: 2 });
-    expect(byTier.get('LV')).toEqual({ power: 1, amps: 1 });
+    // MV power summed (76), but amps is the max of the two machines (2), not 3
+    expect(byTier.get('MV')).toEqual({ power: 76, amps: 2 });
+    expect(byTier.get('LV')).toEqual({ power: 16, amps: 1 });
   });
 
   it('omits zero-power recipes', () => {
@@ -1275,7 +1292,7 @@ describe('lineMetrics', () => {
       machine: 'EBF',
       voltage: 'MV',
       multiplier: 3,
-      eu: 120,
+      eu: 12000,
       time: 5,
     });
 
@@ -1325,7 +1342,7 @@ describe('lineMetrics', () => {
     const metrics = lineMetrics(nodes, edges);
 
     expect(metrics.time).toBe(15); // 5s × 3 runs
-    expect(metrics.demand).toBeCloseTo(1.2); // 120 EU / (5s × 20 ticks)
+    expect(metrics.demand).toBeCloseTo(120); // 12,000 EU / (5s × 20 ticks)
   });
 
   it('is empty for a graph with no nodes', () => {
@@ -1337,5 +1354,280 @@ describe('lineMetrics', () => {
       time: 0,
       demand: 0,
     });
+  });
+});
+
+describe('validateGraph — overclocking', () => {
+  // a multiblock on a 128 EU/t recipe fed one tier above it
+  const multiblock = (patch: Partial<RecipeNodeData> = {}) => {
+    const recipe = addNode('recipeNode');
+    state().updateRecipe(recipe, {
+      kind: 'multi',
+      machine: 'Vacuum Freezer',
+      eu: 153600,
+      time: 60,
+      voltage: 'HV',
+      amperage: 1,
+      ...patch,
+    });
+    return recipe;
+  };
+
+  const kinds = (issues: ReturnType<typeof validateGraph>) =>
+    issues.map(x => x.kind);
+
+  it('raises no overclock issue for a well-fed known multiblock', () => {
+    multiblock();
+    expect(kinds(validateGraph(state().nodes, state().edges))).not.toContain(
+      'underpowered',
+    );
+  });
+
+  it('flags hatches below the recipe requirement', () => {
+    multiblock({ voltage: 'LV' });
+    expect(kinds(validateGraph(state().nodes, state().edges))).toContain(
+      'underpowered',
+    );
+  });
+
+  it('flags overclocks a singleblock loses to the one tick floor', () => {
+    const recipe = addNode('recipeNode');
+    state().updateRecipe(recipe, {
+      machine: 'Macerator',
+      eu: 2560,
+      time: 1,
+      voltage: 'UV',
+    });
+
+    expect(kinds(validateGraph(state().nodes, state().edges))).toContain(
+      'throttled',
+    );
+  });
+
+  it('flags a multiblock the same way — parallels are not derived from power', () => {
+    // one parallel entered, so the two steps past the 1 tick floor are as lost
+    // as a singleblock's: nothing feeds a second concurrent recipe
+    multiblock({ eu: 2560, time: 1, voltage: 'UV', parallels: 1 });
+
+    expect(kinds(validateGraph(state().nodes, state().edges))).toContain(
+      'throttled',
+    );
+    expect(overclock(recipeData(state().nodes[0]!.id)).parallels).toBe(1);
+  });
+
+  it('flags more parallels than the hatches can pay for', () => {
+    // 4 EV hatches = 8,192 EU/t against a 2,048 EU/t recipe: four of the ten
+    multiblock({
+      eu: 2048 * 20,
+      time: 1,
+      hatches: [{ tier: 'EV', count: 4 }],
+      parallels: 10,
+    });
+
+    const issues = validateGraph(state().nodes, state().edges);
+    expect(kinds(issues)).toContain('overparallel');
+
+    const issue = issues.find(entry => entry.kind === 'overparallel');
+    expect(issue?.demand).toBe(10);
+    expect(issue?.supply).toBe(4);
+  });
+
+  it('does not flag parallels the supply covers', () => {
+    multiblock({
+      eu: 2048 * 20,
+      time: 1,
+      hatches: [{ tier: 'EV', count: 4 }],
+      parallels: 4,
+    });
+    expect(kinds(validateGraph(state().nodes, state().edges))).not.toContain(
+      'overparallel',
+    );
+  });
+
+  it('flags a machine whose overclock rules are not modelled', () => {
+    multiblock({ machine: 'Eye of Harmony' });
+    expect(kinds(validateGraph(state().nodes, state().edges))).toContain(
+      'unmodeled',
+    );
+  });
+
+  it('never raises the multiblock-only issues for a singleblock', () => {
+    const recipe = addNode('recipeNode');
+    state().updateRecipe(recipe, {
+      machine: 'Macerator',
+      eu: 153600,
+      time: 60,
+      voltage: 'HV',
+    });
+
+    const found = kinds(validateGraph(state().nodes, state().edges));
+    expect(found).not.toContain('underpowered');
+    expect(found).not.toContain('unmodeled');
+  });
+
+  it('scales item quantities by the parallels actually running', () => {
+    const recipe = multiblock({ parallels: 4, voltage: 'UV' });
+    const plate = addOutput(recipe);
+    state().updateRecipeOutput(recipe, plate, { name: 'Plate', quantity: 3 });
+
+    const output = addNode('outputNode');
+    state().onConnect({
+      source: recipe,
+      target: output,
+      sourceHandle: plate,
+      targetHandle: null,
+    });
+
+    // 3 per recipe x 4 concurrent recipes, mirrored onto the output leaf
+    expect(lineMetrics(state().nodes, state().edges).outputs).toEqual([
+      { name: 'Plate', quantity: 12 },
+    ]);
+  });
+
+  it('reports the overclocked draw from recipePower', () => {
+    const recipe = multiblock();
+    expect(recipePower(recipeData(recipe))).toBe(512);
+  });
+
+  it('drops a stale perfect override when switched back to a singleblock', () => {
+    const recipe = multiblock({
+      machine: 'Electric Blast Furnace',
+      overclock: 'perfect',
+    });
+    state().updateRecipe(recipe, { kind: 'single' });
+
+    expect(recipeData(recipe)).not.toHaveProperty('overclock');
+    // imperfect halves the duration; the dropped perfect choice would quarter it
+    expect(overclock(recipeData(recipe)).time).toBe(30);
+  });
+});
+
+describe('machine shape switching', () => {
+  it('turns a singleblock tier into one hatch group', () => {
+    const recipe = addNode('recipeNode');
+    state().updateRecipe(recipe, { voltage: 'HV', amperage: 2 });
+    state().updateRecipe(recipe, { kind: 'multi' });
+
+    const data = recipeData(recipe);
+    expect(data.kind).toBe('multi');
+    expect(data).toHaveProperty('hatches', [{ tier: 'HV', count: 1 }]);
+    // the recipe's own amp draw is not a hatch count and must survive the switch
+    expect(data).toHaveProperty('amperage', 2);
+    // the singleblock-only tier must not linger on the multiblock arm
+    expect(data).not.toHaveProperty('voltage');
+  });
+
+  it('turns hatches back into a tier when switched to a singleblock', () => {
+    const recipe = addNode('recipeNode');
+    state().updateRecipe(recipe, {
+      kind: 'multi',
+      hatches: [{ tier: 'EV', count: 4 }],
+      parallels: 8,
+    });
+    state().updateRecipe(recipe, { kind: 'single' });
+
+    const data = recipeData(recipe);
+    expect(data).toHaveProperty('voltage', 'EV');
+    expect(data).not.toHaveProperty('hatches');
+    expect(data).not.toHaveProperty('parallels');
+  });
+});
+
+describe('demandByTier — multiblock hatches', () => {
+  it('splits a multiblock load across the tiers of its hatches', () => {
+    const recipe = addNode('recipeNode');
+    state().updateRecipe(recipe, {
+      kind: 'multi',
+      machine: 'TFFT', // no overclock, so the draw stays at the base figure
+      eu: 12000,
+      time: 5, // 120 EU/t
+      amperage: 3, // what the RECIPE draws, not how many hatches are fitted
+      hatches: [
+        { tier: 'MV', count: 1 }, // 128 EU/t of capacity
+        { tier: 'LV', count: 4 }, // 128 EU/t of capacity
+      ],
+    });
+
+    const byTier = demandByTier(state().nodes);
+    // equal capacity either side, so the 120 EU/t load halves between them
+    expect(byTier.get('MV')).toEqual({ power: 60, amps: 3 });
+    expect(byTier.get('LV')).toEqual({ power: 60, amps: 3 });
+  });
+
+  it('represents a mixed-hatch machine by its highest tier', () => {
+    const recipe = addNode('recipeNode');
+    state().updateRecipe(recipe, {
+      kind: 'multi',
+      amperage: 3,
+      hatches: [
+        { tier: 'LV', count: 2 },
+        { tier: 'EV', count: 1 },
+      ],
+    });
+
+    expect(machineTier(recipeData(recipe))).toBe('EV');
+    // amps report the recipe's draw, never the hatch count
+    expect(machineAmps(recipeData(recipe))).toBe(3);
+  });
+});
+
+describe('normalizeNodes — persisted graphs', () => {
+  const persisted = (data: Record<string, unknown>) =>
+    ({
+      id: 'n1',
+      position: { x: 0, y: 0 },
+      type: 'recipeNode',
+      data: {
+        name: 'Recipe',
+        machine: 'EBF',
+        inputs: [],
+        outputs: [],
+        ...data,
+      },
+    }) as unknown as ProductionNode;
+
+  it('backfills hatches on a multiblock saved before they existed', () => {
+    const [node] = normalizeNodes([
+      persisted({
+        kind: 'multi',
+        voltage: 'HV',
+        amperage: 2,
+        multiplier: 1,
+        eu: 100,
+        time: 5,
+      }),
+    ]);
+
+    expect(node!.data).toHaveProperty('hatches', [{ tier: 'HV', count: 1 }]);
+    expect(node!.data).toHaveProperty('amperage', 2);
+    expect(node!.data).not.toHaveProperty('voltage');
+  });
+
+  it('defaults a recipe saved before `kind` existed to a singleblock', () => {
+    const [node] = normalizeNodes([
+      persisted({
+        voltage: 'MV',
+        amperage: 1,
+        multiplier: 1,
+        eu: 100,
+        time: 5,
+      }),
+    ]);
+
+    expect(node!.data).toHaveProperty('kind', 'single');
+    expect(node!.data).toHaveProperty('voltage', 'MV');
+  });
+
+  it('returns an already-current node by identity, so the canvas is not re-rendered', () => {
+    const current = persisted({
+      kind: 'multi',
+      hatches: [{ tier: 'HV', count: 2 }],
+      multiplier: 1,
+      eu: 100,
+      time: 5,
+      amperage: 1,
+    });
+
+    expect(normalizeNodes([current])[0]).toBe(current);
   });
 });

@@ -9,6 +9,8 @@ export default defineConfig(
   [
     globalIgnores([
       '.git/',
+      // paste-into-devtools scripts, not app source — see tools/exportGraphs.js
+      'tools/',
       'build/',
       'dist/',
       'test_coverage/',

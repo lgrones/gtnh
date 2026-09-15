@@ -43,6 +43,14 @@ const issueLabel = (issue: GraphIssue) => {
       return 'not set';
     case 'mismatch':
       return 'connected item names differ';
+    case 'underpowered':
+      return 'hatches cannot run this recipe';
+    case 'overparallel':
+      return `${issue.demand} entered, hatches can only power ${issue.supply}`;
+    case 'throttled':
+      return 'unused, recipe already at 1 tick';
+    case 'unmodeled':
+      return 'overclock not modelled, values used as entered';
   }
 };
 

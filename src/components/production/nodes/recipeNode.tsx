@@ -1,31 +1,89 @@
 import {
   ActionIcon,
   Box,
+  Button,
+  Collapse,
   Divider,
   Group,
   NumberInput,
+  Popover,
+  SegmentedControl,
   Select,
   Stack,
   Text,
   TextInput,
+  Tooltip,
+  UnstyledButton,
 } from '@mantine/core';
-import { IconPlus, IconSettings, IconX } from '@tabler/icons-react';
+import {
+  IconChevronRight,
+  IconDots,
+  IconPlus,
+  IconSettings,
+  IconX,
+} from '@tabler/icons-react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { useShallow } from 'zustand/shallow';
 
 import {
-  recipePower,
   useProductionStore,
   VOLTAGE_TIERS,
+  type EnergyHatch,
   type ProductionNode as IProductionNode,
 } from '@/contexts/productionStore';
+import {
+  findMultiblock,
+  matchesMultiblock,
+  MULTIBLOCKS,
+} from '@/domain/multiblocks';
+import {
+  basePower,
+  overclock,
+  recipeTier,
+  suppliedPower,
+  tierAbove,
+} from '@/domain/overclock';
+import { RECIPE_TIER_EU } from '@/domain/tiers';
 
 import { ProductionNode } from './productionNode';
 
 import classes from './productionNode.module.css';
 
 type RecipeNodeType = Extract<IProductionNode, { type: 'recipeNode' }>;
+
+const MULTIBLOCK_OPTIONS = MULTIBLOCKS.map(x => x.name);
+const fmt = (value: number) =>
+  value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+// right-section adornments are abbreviated to keep the fields narrow; the full
+// name lives in a tooltip. rightSectionPointerEvents must be `auto` for hover
+// `w` wraps the tooltip for the fields whose unit needs a sentence rather than
+// a name — the parallel ceiling being the one that does
+const Unit = ({
+  abbr,
+  label,
+  w,
+}: {
+  abbr: string;
+  label: string;
+  w?: number;
+}) => (
+  <Tooltip label={label} withArrow multiline={w !== undefined} w={w}>
+    <Text size="sm" c="dimmed" pr={6} style={{ cursor: 'help' }}>
+      {abbr}
+    </Text>
+  </Tooltip>
+);
+
+const KIND_OPTIONS = [
+  { value: 'single', label: 'Single' },
+  { value: 'multi', label: 'Multi' },
+];
+const OVERCLOCK_OPTIONS = [
+  { value: 'imperfect', label: 'Imperfect (2x/4x)' },
+  { value: 'perfect', label: 'Perfect (4x/4x)' },
+];
 
 export const RecipeNode = ({
   id,
@@ -83,28 +141,84 @@ export const RecipeNode = ({
   }, []);
 
   return (
-    <ProductionNode id={id} data={data} {...props} type="none" color="indigo">
-      <Stack pt="xs">
+    <ProductionNode
+      id={id}
+      data={data}
+      {...props}
+      type="none"
+      color="indigo"
+      rightSection={
+        <SegmentedControl
+          ml="auto"
+          size="xs"
+          // no separators between segments — the node's inputs have no internal
+          // rules either, and a pill plus a hairline reads as two borders
+          withItemsBorders={false}
+          classNames={{
+            root: classes['kind-root'],
+            indicator: classes['kind-indicator'],
+            label: classes['kind-label'],
+          }}
+          data={KIND_OPTIONS}
+          value={data.kind}
+          // switching shape clears the machine: a hand-typed singleblock name
+          // is never a valid catalog entry, and vice versa
+          onChange={value =>
+            updateRecipe(id, {
+              kind: value === 'multi' ? 'multi' : 'single',
+              machine: '',
+            })
+          }
+        />
+      }
+    >
+      <Stack pt="xs" w={400}>
+        {/* what the machine IS */}
         <Group gap="sm" wrap="nowrap">
-          <TextInput
-            w={180}
-            placeholder="Machine"
-            value={data.machine}
-            onChange={event =>
-              updateRecipe(id, { machine: event.currentTarget.value })
-            }
-          />
+          {data.kind === 'multi' ? (
+            <Select
+              flex={1}
+              searchable
+              placeholder="Multiblock"
+              data={MULTIBLOCK_OPTIONS}
+              value={data.machine === '' ? null : data.machine}
+              onChange={value => updateRecipe(id, { machine: value ?? '' })}
+              // the options are flat strings, so anything with a `value` is an
+              // option rather than a group header
+              filter={({ options, search }) =>
+                options.filter(
+                  option =>
+                    'value' in option &&
+                    matchesMultiblock(option.value, search),
+                )
+              }
+              comboboxProps={{ width: 280 }}
+            />
+          ) : (
+            <TextInput
+              flex={1}
+              placeholder="Machine"
+              value={data.machine}
+              onChange={event =>
+                updateRecipe(id, { machine: event.currentTarget.value })
+              }
+            />
+          )}
 
-          <Select
-            w={80}
-            data={VOLTAGE_TIERS}
-            value={data.voltage}
-            onChange={value => value && updateRecipe(id, { voltage: value })}
-            comboboxProps={{ width: 'auto' }}
-          />
+          {/* a singleblock is powered by its voltage alone, so the tier sits
+              with the machine rather than in a Power section of its own */}
+          {data.kind === 'single' && (
+            <Select
+              w={92}
+              data={VOLTAGE_TIERS}
+              value={data.voltage}
+              onChange={value => value && updateRecipe(id, { voltage: value })}
+              comboboxProps={{ width: 'auto' }}
+            />
+          )}
 
           <NumberInput
-            w={96}
+            w={70}
             min={1}
             hideControls
             allowNegative={false}
@@ -115,31 +229,75 @@ export const RecipeNode = ({
                 multiplier: typeof value === 'number' ? value : data.multiplier,
               })
             }
-            rightSection={
-              <Text size="sm" c="dimmed" pr={6}>
-                Cycles
-              </Text>
-            }
-            rightSectionPointerEvents="none"
-            rightSectionWidth={56}
+            rightSection={<Unit abbr="C" label="Cycles" />}
+            rightSectionPointerEvents="auto"
+            rightSectionWidth={28}
           />
         </Group>
 
+        {data.kind === 'multi' && (
+          <>
+            <Divider />
+
+            {/* what FEEDS it */}
+            <Box>
+              <Text c="dimmed" size="xs" tt="uppercase" fw="600" pb={4}>
+                Power
+              </Text>
+
+              <Group gap="sm">
+                <HatchField id={id} hatches={data.hatches} />
+
+                <NumberInput
+                  w={70}
+                  min={1}
+                  hideControls
+                  allowNegative={false}
+                  allowDecimal={false}
+                  value={data.parallels ?? 1}
+                  onChange={value =>
+                    updateRecipe(id, {
+                      parallels: typeof value === 'number' ? value : 1,
+                    })
+                  }
+                  rightSection={
+                    <Unit
+                      abbr="P"
+                      w={260}
+                      label="Max parallels. A multiblock fills these from whatever its input buses and hatches can feed it per cycle, so this is a ceiling, not a target — spare power alone never adds one."
+                    />
+                  }
+                  rightSectionPointerEvents="auto"
+                  rightSectionWidth={26}
+                />
+
+                {/* only `mixed` machines can do either, so only they get the choice */}
+                {findMultiblock(data.machine)?.overclock === 'mixed' && (
+                  <Select
+                    w={160}
+                    data={OVERCLOCK_OPTIONS}
+                    value={data.overclock ?? 'imperfect'}
+                    onChange={value =>
+                      updateRecipe(id, {
+                        overclock:
+                          value === 'perfect' ? 'perfect' : 'imperfect',
+                      })
+                    }
+                    comboboxProps={{ width: 'auto' }}
+                  />
+                )}
+              </Group>
+            </Box>
+          </>
+        )}
+
         <Divider />
 
+        {/* what the RECIPE costs, exactly as NEI states it */}
         <Box>
-          <Group justify="space-between" pb={4}>
-            <Text c="dimmed" size="xs" tt="uppercase" fw="600">
-              Energy
-            </Text>
-
-            <Text size="sm" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
-              {recipePower(data).toLocaleString(undefined, {
-                maximumFractionDigits: 1,
-              })}{' '}
-              EU/t
-            </Text>
-          </Group>
+          <Text c="dimmed" size="xs" tt="uppercase" fw="600" pb={4}>
+            Recipe
+          </Text>
 
           <Group gap="sm">
             <NumberInput
@@ -179,14 +337,13 @@ export const RecipeNode = ({
                   time: typeof value === 'number' ? value : data.time,
                 })
               }
-              rightSection={
-                <Text size="sm" c="dimmed" pr={6}>
-                  s
-                </Text>
-              }
-              rightSectionPointerEvents="none"
+              rightSection={<Unit abbr="s" label="Seconds" />}
+              rightSectionPointerEvents="auto"
+              rightSectionWidth={24}
             />
 
+            {/* amps are a property of the RECIPE, not of how it is powered —
+                multiblock recipes have them too (the Arc Furnace needs 3A) */}
             <NumberInput
               w={70}
               min={1}
@@ -199,15 +356,17 @@ export const RecipeNode = ({
                   amperage: typeof value === 'number' ? value : data.amperage,
                 })
               }
-              rightSection={
-                <Text size="sm" c="dimmed" pr={6}>
-                  A
-                </Text>
-              }
-              rightSectionPointerEvents="none"
+              rightSection={<Unit abbr="A" label="Amperage" />}
+              rightSectionPointerEvents="auto"
+              rightSectionWidth={26}
             />
           </Group>
         </Box>
+
+        <Divider />
+
+        {/* what it all COMES TO — computed, never typed into */}
+        <Calculations data={data} />
 
         <Divider />
 
@@ -348,5 +507,317 @@ export const RecipeNode = ({
         </Box>
       </Stack>
     </ProductionNode>
+  );
+};
+
+// energy hatches feeding a multiblock. the normal build is one group of
+// identical hatches, which is what the inline controls edit; the popover is
+// there for the rare mixed-tier setup
+const HatchField = ({
+  id,
+  hatches,
+}: {
+  id: string;
+  hatches: EnergyHatch[];
+}) => {
+  const updateRecipe = useProductionStore(state => state.updateRecipe);
+  const [opened, setOpened] = useState(false);
+
+  const set = (next: EnergyHatch[]) =>
+    updateRecipe(id, {
+      hatches: next.length > 0 ? next : [{ tier: 'LV', count: 1 }],
+    });
+
+  const only = hatches.length === 1 ? hatches[0] : undefined;
+
+  // the mixed-tier editor. its trigger is merged onto the field beside it, the
+  // way Button.Group joins buttons — shared edge, no double border
+  const editor = (target: ReactNode) => (
+    <Popover
+      opened={opened}
+      onChange={setOpened}
+      position="bottom-end"
+      arrowPosition="center"
+      withArrow
+      shadow="md"
+    >
+      <Popover.Target>{target}</Popover.Target>
+
+      <Popover.Dropdown>
+        <Stack gap="xs">
+          <Text size="xs" c="dimmed">
+            Mixed hatch tiers
+          </Text>
+
+          {hatches.map((hatch, index) => (
+            <Group gap={4} key={index} wrap="nowrap">
+              <Select
+                w={80}
+                data={VOLTAGE_TIERS}
+                value={hatch.tier}
+                onChange={value =>
+                  value &&
+                  set(
+                    hatches.map((x, i) =>
+                      i === index ? { ...x, tier: value } : x,
+                    ),
+                  )
+                }
+                comboboxProps={{ width: 'auto' }}
+              />
+
+              <NumberInput
+                w={72}
+                min={1}
+                hideControls
+                allowNegative={false}
+                allowDecimal={false}
+                value={hatch.count}
+                onChange={value =>
+                  set(
+                    hatches.map((x, i) =>
+                      i === index
+                        ? { ...x, count: typeof value === 'number' ? value : 1 }
+                        : x,
+                    ),
+                  )
+                }
+              />
+
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                disabled={hatches.length === 1}
+                onClick={() => set(hatches.filter((_, i) => i !== index))}
+                aria-label="Remove hatch group"
+              >
+                <IconX size={16} />
+              </ActionIcon>
+            </Group>
+          ))}
+
+          <Button
+            size="xs"
+            variant="subtle"
+            leftSection={<IconPlus size={14} />}
+            onClick={() => set([...hatches, { tier: 'LV', count: 1 }])}
+          >
+            Add tier
+          </Button>
+        </Stack>
+      </Popover.Dropdown>
+    </Popover>
+  );
+
+  const trigger = (
+    <ActionIcon
+      variant="outline"
+      bg="black"
+      c="dark.0"
+      bd="1px solid dark.7"
+      h={36}
+      w={30}
+      onClick={() => setOpened(o => !o)}
+      aria-label="Mixed hatch tiers"
+      // square off the joined edge and pull it onto the field's border
+      style={{
+        borderTopLeftRadius: 0,
+        borderBottomLeftRadius: 0,
+        marginLeft: -1,
+      }}
+    >
+      <IconDots size={14} />
+    </ActionIcon>
+  );
+
+  if (only === undefined)
+    return (
+      <Group gap={4} wrap="nowrap">
+        <Text size="sm">
+          {hatches.map(x => `${x.count}× ${x.tier}`).join(' + ')}
+        </Text>
+        {editor(trigger)}
+      </Group>
+    );
+
+  return (
+    <Group gap="sm" wrap="nowrap">
+      <Select
+        w={80}
+        data={VOLTAGE_TIERS}
+        value={only.tier}
+        onChange={value => value && set([{ ...only, tier: value }])}
+        comboboxProps={{ width: 'auto' }}
+      />
+
+      <Group gap={0} wrap="nowrap">
+        <NumberInput
+          w={70}
+          min={1}
+          hideControls
+          allowNegative={false}
+          allowDecimal={false}
+          value={only.count}
+          onChange={value =>
+            set([{ ...only, count: typeof value === 'number' ? value : 1 }])
+          }
+          rightSection={<Unit abbr="EH" label="Energy Hatches" />}
+          rightSectionPointerEvents="auto"
+          rightSectionWidth={34}
+          styles={{
+            input: { borderTopRightRadius: 0, borderBottomRightRadius: 0 },
+          }}
+        />
+
+        {editor(trigger)}
+      </Group>
+    </Group>
+  );
+};
+
+// `formula` is the working-out and stays dimmed; `value` is the answer and is
+// the only thing at full contrast, so a column of rows reads as answers first
+const Row = ({
+  label,
+  formula,
+  value,
+}: {
+  label: string;
+  formula?: ReactNode;
+  value: ReactNode;
+}) => (
+  <Group gap="xs" wrap="nowrap" justify="space-between">
+    <Text size="xs" c="dimmed">
+      {label}
+    </Text>
+
+    <Group gap={6} wrap="nowrap" style={{ textAlign: 'right' }}>
+      {formula !== undefined && (
+        <Text size="sm" c="dimmed" component="div">
+          {formula}
+        </Text>
+      )}
+
+      <Text size="sm" component="div">
+        {value}
+      </Text>
+    </Group>
+  </Group>
+);
+
+// everything the machine and recipe together come to. read-only on purpose, and
+// each row shows the arithmetic rather than just the answer. collapsible, since
+// it is reference material once a node is dialled in
+const Calculations = ({ data }: { data: RecipeNodeType['data'] }) => {
+  const [open, setOpen] = useState(true);
+  const result = overclock(data);
+  const base = basePower(data.eu, data.time);
+  const baseTier = recipeTier(base);
+  const supply = suppliedPower(data);
+  const powerFactors =
+    `${fmt(base)} EU/t` +
+    (result.parallels > 1 ? ` × ${result.parallels}P` : '') +
+    (result.steps > 0 ? ` × 4^${result.steps}` : '');
+
+  // the short answer goes in the row; the reasoning hangs off it
+  const overclockLabel =
+    result.steps > 0 ? `${result.steps}× ${result.mode}` : 'none';
+
+  const overclockDetail = () => {
+    if (result.steps > 0)
+      return (
+        `${result.mode === 'perfect' ? 'Each step quarters the duration' : 'Each step halves the duration'} and quadruples the power.` +
+        (result.surplus > 0
+          ? ` ${result.surplus} more the supply could pay for went unused — the recipe is already at the 1 tick floor, and extra power cannot run parallels the machine is not fed for.`
+          : '')
+      );
+    if (result.underpowered)
+      return `The supply of ${fmt(supply)} EU/t cannot even run the recipe's ${fmt(base)} EU/t.`;
+    if (result.mode === 'none') return 'This machine cannot overclock at all.';
+    if (result.mode === 'unique')
+      return 'This machine follows its own overclock rules, which are not modelled — the figures are as entered.';
+
+    const next = tierAbove(result.recipe);
+    if (next === undefined) return 'Already at the top tier.';
+    return `An overclock needs a full tier of headroom, not merely 4× the draw. This needs ${next} (${fmt(RECIPE_TIER_EU[next])} EU/t); it is fed ${result.supplied} (${fmt(supply)} EU/t).`;
+  };
+
+  return (
+    <Box>
+      <UnstyledButton
+        onClick={() => setOpen(o => !o)}
+        style={{ width: '100%' }}
+      >
+        <Group gap={4} pb={4} wrap="nowrap">
+          <IconChevronRight
+            size={12}
+            style={{
+              transform: open ? 'rotate(90deg)' : undefined,
+              transition: 'transform 150ms ease',
+            }}
+            color="var(--mantine-color-dimmed)"
+          />
+          <Text c="dimmed" size="xs" tt="uppercase" fw="600">
+            Calculations
+          </Text>
+        </Group>
+      </UnstyledButton>
+
+      <Collapse expanded={open}>
+        <Stack gap={2}>
+          <Row
+            label="Power"
+            formula={base === result.power ? undefined : `${powerFactors} →`}
+            value={`${fmt(result.power)} EU/t`}
+          />
+
+          <Row
+            label="Time"
+            formula={
+              result.steps > 0
+                ? `${fmt(data.time)}s ÷ ${result.divisor}^${result.steps} →`
+                : undefined
+            }
+            value={`${fmt(result.time)}s`}
+          />
+
+          {data.multiplier > 1 && (
+            <Row
+              label="Total"
+              formula={`${fmt(result.time)}s × ${data.multiplier} =`}
+              value={`${fmt(result.time * data.multiplier)}s`}
+            />
+          )}
+
+          <Row
+            label="Tier"
+            formula={baseTier === result.recipe ? undefined : `${baseTier} →`}
+            value={result.recipe}
+          />
+
+          {result.parallels > 1 && (
+            <Row label="Parallels" value={String(result.parallels)} />
+          )}
+
+          <Row
+            label="Overclock"
+            value={
+              <Tooltip label={overclockDetail()} multiline w={300} withArrow>
+                <Text
+                  size="sm"
+                  style={{
+                    cursor: 'help',
+                    textDecoration: 'underline dotted',
+                    textUnderlineOffset: 3,
+                  }}
+                >
+                  {overclockLabel}
+                </Text>
+              </Tooltip>
+            }
+          />
+        </Stack>
+      </Collapse>
+    </Box>
   );
 };

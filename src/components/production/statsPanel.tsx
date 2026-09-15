@@ -8,6 +8,8 @@ import {
 } from '@tabler/icons-react';
 
 import {
+  machineAmps,
+  machineTier,
   useProductionStore,
   type ProductionNode,
   type ProductionNodeType,
@@ -19,7 +21,7 @@ export const StatsPanel = () => {
   const nodes = useProductionStore(state => state.nodes);
   const maxAmperage = nodes
     .filter(x => x.type === 'recipeNode')
-    .reduce((acc, curr) => Math.max(acc, curr.data.amperage), 0);
+    .reduce((acc, curr) => Math.max(acc, machineAmps(curr.data)), 0);
 
   return (
     <Paper h="100%" p="md" component={Stack} style={{ overflow: 'auto' }}>
@@ -64,7 +66,7 @@ export const StatsPanel = () => {
         type="recipeNode"
         groupBy={node =>
           node.type === 'recipeNode'
-            ? `${node.data.machine} (${node.data.voltage})`
+            ? `${node.data.machine} (${machineTier(node.data)})`
             : ''
         }
         icon={
@@ -76,7 +78,9 @@ export const StatsPanel = () => {
         label="Voltages"
         nodes={nodes}
         type="recipeNode"
-        groupBy={node => (node.type === 'recipeNode' ? node.data.voltage : '')}
+        groupBy={node =>
+          node.type === 'recipeNode' ? machineTier(node.data) : ''
+        }
         icon={<IconBolt size={16} color="var(--mantine-color-yellow-filled)" />}
       />
 
