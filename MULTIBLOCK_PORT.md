@@ -9,7 +9,7 @@ work can be picked up in a fresh session without re-deriving anything.
 from the wiki, and `MultiblockRecipeData.parallels` is a number the user types
 in. Neither survives contact with the game: parallels follow no single formula,
 some machines cap hard, others scale with voltage tier or structure blocks, and
-the EBF family pays *less* EU the better its coils.
+the EBF family pays _less_ EU the better its coils.
 
 So: extract the real numbers from GregTech source at the version actually played,
 ship them as generated JSON, and port GT's own `OverclockCalculator` and
@@ -45,7 +45,7 @@ target each, and `MTEMultiBlockBase.getMaxParallelRecipes()` returns 1.
 **Sub-tick parallels are unconditional.** `calculateMultiplierUnderOneTick()`
 returns `1.0` when sub-tick is not reached, so `ParallelHelper` applies it to
 every machine. There is no per-machine switch. This is the single biggest
-correction to the old model: overclocks past the one-tick floor buy *parallels*,
+correction to the old model: overclocks past the one-tick floor buy _parallels_,
 not nothing. A 32 EU/t, 20-tick recipe on a UV hatch yields a **7x** multiplier.
 
 **The supply model in `overclock.ts` is wrong.**
@@ -82,27 +82,41 @@ constants (Volcanus 8, Mega ABS 256, steam multis 8); `N x voltageTier`
 `12 * itemPipeTier`, Forge Hammer `8 * anvilTier`); runtime structure counts
 (turbine assemblies, laser amps, PCB Factory upgrades);
 `Configuration.Multiblocks.megaMachinesMax` (256) for every bartworks mega multi;
-and ~49 controllers that never set one, the EBF included.
+and 144 controllers that never set one and therefore run at 1 parallel, the EBF
+included. (The plan's estimate of ~49 was low: many controllers call
+`setMaxParallelSupplier(this::getTrueParallel)` without overriding
+`getMaxParallelRecipes()`, which resolves to the base class's `return 1`.)
 
 **Display names come from registration sites**, e.g.
 `new MTEElectricBlastFurnace(ID, "multimachine.blastfurnace", "Electric Blast Furnace")`
 in `gregtech/loaders/preload/LoaderMetaTileEntities.java` and the
 `gtPlusPlus/xmod/gregtech/registration/**` files. Third argument is the display
-name. Cross-check: 116 of our 145 current names match a `GregTech.lang` value
-exactly; the other 29 need aliases.
+name — for gregtech. The addons pass a translation key instead, and the lang
+files that resolve it **ship in the checkout** at
+`src/main/resources/assets/*/lang/en_US.lang`, so no game install is needed.
+Registration is also sometimes on a nested class
+(`new MTEVoidMiners.VMUV(…)`). With all three handled, 194 of 214 controllers
+name themselves from a registration site, 19 from a lang file, and one
+(`MTEBaseModule`, a godforge base) from nothing.
+
+**Every controller is a subclass of `MTEMultiBlockBase`**, gregtech's own and
+all ten addons'. So the machine list is not curated: it is whatever that class
+graph holds — 244 subclasses, 214 of them concrete.
 
 ## Done so far
 
-| Stage | What | Commit |
-|---|---|---|
-| 1 | `src/domain/gt/num.ts` — Java integer semantics | `2a24a30` |
-| 2 | `src/domain/gt/{overclockCalculator,parallel}.ts` — the port | `64a4f1a` |
-| 3 | `src/domain/machines/{types,expr}.ts`, `src/data/{coils,gtConfig}.json` | `0b36989` |
-| 4 | `src/domain/machines/{merge,catalog,customFormulas}.ts`, `src/data/gt/*`, `src/data/machines.json` | `dfa133f` |
+| Stage | What                                                                                                                   | Commit    |
+| ----- | ---------------------------------------------------------------------------------------------------------------------- | --------- |
+| 1     | `src/domain/gt/num.ts` — Java integer semantics                                                                        | `2a24a30` |
+| 2     | `src/domain/gt/{overclockCalculator,parallel}.ts` — the port                                                           | `64a4f1a` |
+| 3     | `src/domain/machines/{types,expr}.ts`, `src/data/{coils,gtConfig}.json`                                                | `0b36989` |
+| 4     | `src/domain/machines/{merge,catalog,customFormulas}.ts`, `src/data/gt/*`, `src/data/machines.json`                     | `dfa133f` |
+| 5     | `src/tools/gtSource/*.ts` + `src/tools/extractMachines.test.ts`; `src/data/gt/{raw.machines,aliases}.json` regenerated | pending   |
 
-259 tests pass; types, lint and format clean. **Nothing is wired into the app
-yet** — `src/domain/overclock.ts` still runs the old heuristic, so behaviour is
-unchanged.
+323 tests pass; types and lint clean, and format is clean apart from
+`src/domain/overclock.ts`, which already drifted on main. **Nothing is wired
+into the app yet** — `src/domain/overclock.ts` still runs the old heuristic, so
+behaviour is unchanged.
 
 Every expected value in the kernel tests was worked through by hand against the
 Java before the code was written. Notable pinned results:
@@ -116,40 +130,69 @@ Java before the code was written. Notable pinned results:
 
 One GT bug is reproduced rather than fixed, with a comment: in
 `calculateMultiplierUnderOneTick`'s laser branch, `overclocks` inside both loops
-resolves to the calculator's *field* (still 0), not the local declared after
+resolves to the calculator's _field_ (still 0), not the local declared after
 them, so the guard is a constant.
+
+## Stage 5 — what the extractor is, and what it found
+
+`src/tools/gtSource/` is six modules, each testable on its own:
+
+| File                 | Does                                                                                                      |
+| -------------------- | --------------------------------------------------------------------------------------------------------- |
+| `source.ts`          | fetch the tagged tarball into `.gt-cache/`, unpack with `tar`, walk `src/main/java`                       |
+| `scrub.ts`           | blank comments and literal contents to same-length filler; bracket matching and argument splitting on top |
+| `classes.ts`         | class graph, method bodies, anonymous-subclass bodies, `static final` constants, field assignments        |
+| `javaExpr.ts`        | recursive-descent parser for the Java subset GT's formulas use                                            |
+| `mapExpr.ts`         | that tree to the catalog's `Expr`, declaring machine parameters as a side effect                          |
+| `lang.ts`            | display names from the checkout's `.lang` files                                                           |
+| `structureParams.ts` | the hint table for state assigned during `checkMachine`                                                   |
+| `extract.ts`         | orchestrates the above into one `Machine` per controller                                                  |
+| `report.ts`          | the coverage report                                                                                       |
+
+`scrub`, `javaExpr`, `mapExpr`, `classes` and `lang` have unit tests that run in
+an ordinary `pnpm test` (64 of them). Every case in them is copied from real
+5.09.51.482 source, and the "refuses" cases matter as much as the passes: the
+extractor's contract is that it reports what it cannot read.
+
+**Results at 5.09.51.482**: 214 controllers — 171 `modelled`, 19 `partial`, 24
+`unknown`. Parallel models: 144 `none` (GT's default of 1), 31 `formula`, 15
+`constant`, 24 `unknown`. 7 machines declare a coil parameter and 4 a structure
+tier. 63 things could not be read, each listed in the report with its Java, its
+file and line, and its reason.
+
+Spot-checked against the hand-worked stage-4 seeds and they agree: the EBF's
+`coil heat + 100 * (tier - 2)`, Volcanus at 8 parallels with 0.9 and 1/2.2, the
+LCR's perfect overclock, `6 * tier` for the Industrial Centrifuge, the Pyrolyse
+Oven's `2 / (1 + coil tier)` (which lives inside an overridden `process()`, not
+the builder chain), and the Chemical Plant's `2 * pipeCasingTier`.
+
+What stays unresolved is what the plan predicted, and each machine's `notes`
+says so in words the node UI can show: runtime mode branches (Dangote Distillus,
+Matter Fabrication CPU), structure counts with no bounds in source (the XL
+turbines' `getFullTurbineAssemblies().size()`), laser amperage, and fields
+assigned inside a `&&` chain during `checkMachine` (Zyngen's
+`mLevel = getCoilLevel().getTier() + 1`). Resolving more of these means
+extending `structureParams.ts` with bounds read out of the source, or teaching
+`classes.ts` to read an assignment that is not terminated by `;`.
+
+**`resolveParam`'s unimplemented ladders stayed unimplemented and nothing
+declares one.** A casing tier comes out as a `count` parameter with grounded
+bounds instead — anvil 1–4, item pipe 1–8, pipe casing 0–3, each with the source
+line the bounds came from. A named ladder is still the upgrade; the ParamKinds
+are reserved for it.
 
 ## Still to do
 
-| Stage | What |
-|---|---|
-| 5 | The extractor — `src/tools/extractMachines.test.ts` + `src/tools/gtSource/*.ts` |
-| 6 | Store types and migration (`v`, `config`, `recipeHeat`, `parallelLimit`, hatch `amps`) |
-| 7 | Swap `src/domain/overclock.ts` onto the port; delete `multiblocks.ts` |
-| 8 | `GraphIssue` kinds and the issue panel |
-| 9 | Node UI — machine parameters, recipe heat, rewritten `Calculations` |
+| Stage | What                                                                              |
+| ----- | --------------------------------------------------------------------------------- |
+| 6     | Store types and migration (`config`, `recipeHeat`, `parallelLimit`, hatch `amps`) |
+| 7     | Swap `src/domain/overclock.ts` onto the port; delete `multiblocks.ts`             |
+| 8     | `GraphIssue` kinds and the issue panel                                            |
+| 9     | Node UI — machine parameters, recipe heat, rewritten `Calculations`               |
 
 The full plan, including the design rationale for each stage, is at
-`~/.claude/plans/continuing-with-the-multilocks-declarative-turtle.md`.
-
-### Extractor notes worth keeping
-
-- Parse in three passes: scrub comments and string literals to same-length
-  placeholders; block-extract methods by brace matching; then a recursive-descent
-  mini-parser over a small Java expression subset mapped to `Expr` through a
-  known-call table.
-- **`setSpeedBonus`/`setEuModifier` are not always in the builder chain.** The
-  Pyrolyse Oven calls `setSpeedBonus(2f / (1 + coilHeat.getTier()))` inside an
-  overridden `process()`, so the whole anonymous `ProcessingLogic` subclass body
-  has to be scanned.
-- Expect to fail on: inherited config (walk the superclass chain), state assigned
-  during `checkMachine` (`mBlockTier`, `laserAmps`, PCB Factory's `mMaxParallel`),
-  runtime mode branches, lambdas other than `this::getTrueParallel`, tiered
-  registration loops that build names by string concatenation, and machines from
-  other mods entirely. Emit `unresolved` rather than guessing.
-- The GT++ pipe and item-pipe casing ladders have no data yet. `resolveParam`
-  throws for those kinds on purpose and `catalog.test.ts` asserts no machine
-  declares one, so it surfaces at build time.
+`~/.claude/plans/continuing-with-the-multilocks-declarative-turtle.md`. Read its
+stage 6 against the decision below, which supersedes part of it.
 
 ## Commands
 
@@ -159,7 +202,16 @@ pnpm types:check          # tsc -b
 pnpm validate             # lint + styles + format + types
 pnpm exec oxfmt src/...   # format (note: src/domain/overclock.ts has pre-existing drift on main)
 
-# rebuild src/data/machines.json after editing raw.machines.json or overrides
+# re-extract the catalog from GregTech source. dry by default: it prints the
+# coverage report and also writes it to .gt-cache/extract-report.txt. read that
+# before passing GT_WRITE=1, which rewrites raw.machines.json AND machines.json
+GT_VERSION=5.09.51.482 pnpm gt:extract
+GT_VERSION=5.09.51.482 GT_WRITE=1 pnpm gt:extract
+# optional: GT_LANG=<pack>/GregTech.lang adds a pack instance's own names,
+# GT_FAIL_ON_REGRESSION=1 fails if any counter got worse than .gt-cache/counters.json
+# a run takes about a minute; the tarball is cached in .gt-cache/ (gitignored)
+
+# rebuild src/data/machines.json after editing overrides or aliases by hand
 CATALOG_WRITE=1 pnpm vitest run src/tools/buildCatalog.test.ts
 
 # see how real saved graphs change (dump via tools/exportGraphs.js)
@@ -175,12 +227,28 @@ AUDIT_DUMP=/path/to/graphs.json pnpm vitest run src/tools/auditGraphs.test.ts
 5. `EnergyHatch` gains an explicit `amps` field (default 2), with the
    `useSingleAmp` rule living in the engine.
 6. Ship in stages, app green after each.
-
-Open call, flagged for review: legacy multi nodes are planned to migrate to
-`parallelLimit: parallels ?? 1`, preserving every saved graph's item quantities,
-rather than letting the real machine cap take over and silently re-throughput
-lines nobody touched. `auditGraphs.test.ts` can measure the alternative's blast
-radius against a production dump.
+7. **Live multiblock data is disposable.** The production graphs hold almost no
+   multiblock nodes — a handful — and clean architecture is worth more than
+   keeping them. Three things follow, and they replace what the plan's stage 6
+   says:
+   - **No `parallelLimit: parallels ?? 1` backfill.** A legacy multi drops
+     `parallels` and `overclock` and takes the real machine cap. Nothing has to
+     reproduce the old throughput, so nothing does.
+   - **The schema stamp `v` is no longer load-bearing.** Its only job was to
+     answer "did this multi ever have a `parallels` value?" so the backfill
+     could converge. With no backfill, "has `overclock` or `parallels`" answers
+     it, and `needsBackfill` still goes exactly false once they are gone — which
+     is what stops `normalizeNodes` rebuilding a node on every remote update.
+     Reconsider `v` only if a future migration actually needs it.
+   - The 145 frozen legacy names are therefore **reported, not gated**. 131 of
+     them resolve. The 14 that do not are machines from mods outside this repo
+     (Ender Quarry, Stargate, Draconic Reactor, Forestry Multifarm) or ones no
+     longer in GT5-Unofficial; aliasing them to a plausible-looking neighbour
+     would be a guess, so they stay unmapped and the report lists them.
+8. **Single blocks must keep working.** That is where the live data actually is.
+   They never touch `ParallelHelper` or the catalog, so stage 7 has to keep
+   their path — `machineVoltage = TIER_EU[voltage]`, amperage 1, `amperageOC`
+   false — separate and covered by its own tests.
 
 ## Verify against the game before trusting any of this
 

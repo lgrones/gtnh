@@ -38,6 +38,12 @@ export interface AliasFile {
   schemaVersion: number;
   /** Legacy or shorthand name -> machine id */
   byName: Record<string, string>;
+  /**
+   * Why each alias exists, keyed the same way. Documentation for whoever reads
+   * the file next; nothing loads it, and an entry here without one in `byName`
+   * does nothing.
+   */
+  why?: Record<string, string>;
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>

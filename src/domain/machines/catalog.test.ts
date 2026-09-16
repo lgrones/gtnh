@@ -241,7 +241,9 @@ describe('formulas', () => {
         expect(Number.isInteger(resolved.maxParallel), where).toBe(true);
 
         expect(Number.isFinite(resolved.machineHeat), where).toBe(true);
-        expect(resolved.eutModifier, where).toBeGreaterThan(0);
+        // zero is legal and real: the Algae Farm calls setEuModifier(0F) and
+        // runs for free. A negative one would be the bug
+        expect(resolved.eutModifier, where).toBeGreaterThanOrEqual(0);
         expect(resolved.durationModifier, where).toBeGreaterThan(0);
         expect(resolved.durationDecreasePerOC, where).toBeGreaterThan(1);
         expect(resolved.eutIncreasePerOC, where).toBeGreaterThan(1);

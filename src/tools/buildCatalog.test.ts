@@ -10,6 +10,7 @@
 // guard test can recompute the shipped artifact and prove it was not hand
 // edited. Once the extractor lands it writes raw.machines.json and then calls
 // this same merge.
+import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
 import { expect, test } from 'vitest';
@@ -38,6 +39,8 @@ test.skipIf(!process.env.CATALOG_WRITE)(
   () => {
     const path = 'src/data/machines.json';
     writeFileSync(path, `${JSON.stringify(catalog, null, 2)}\n`);
+    // through the repo formatter, so a rebuild leaves `pnpm validate` green
+    execFileSync('pnpm', ['exec', 'oxfmt', path], { stdio: 'ignore' });
 
     expect(catalog.machines.length).toBeGreaterThan(0);
     // oxlint-disable-next-line no-console -- this is a script; the report is the point
