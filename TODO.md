@@ -1,91 +1,60 @@
 # TODO
 
-## Derive multiblock parallels from hatch and bus sizes
+## Bound multiblock parallels by what the input buses can feed
 
-**Status:** idea only — needs in-game confirmation before building.
+**Status:** the seam exists and nothing passes through it. Needs in-game
+measurement before building.
 
-### The problem
+### What the GregTech port already settled
 
-`MultiblockRecipeData.parallels` is hand-entered and defaults to 1. That default is
-wrong for any machine that actually parallelizes, and there is no data source to
-seed a better one — the wiki tabulates no per-machine maximum (Volcanus's 8 appears
-only inside a worked example).
+Most of what this entry used to ask has been answered by reading GT source at
+`5.09.51.482` rather than the wiki — see `MULTIBLOCK_PORT.md`.
 
-Worse, the field reads like a choice. In game it is not: a multiblock runs as many
-parallels as its inputs and power allow. If a pipe refills the hatch before the
-current cycle ends, the next recipes run concurrently whether or not that was the
-plan. The only way to run fewer is to deliberately starve the input, which nobody
-does. So the planner should be deriving this number, not asking for it.
+- **A per-machine cap is real, and it is now data.** `ParallelHelper` takes the
+  minimum of the controller's own cap, what the power pays for, and an input
+  bound. The caps are extracted per machine into `src/data/machines.json`:
+  constants, `N x voltageTier`, `N x structureTier`, runtime structure counts,
+  and the 144 controllers that never set one and therefore run at 1.
+- **The hand-entered `parallels` field is gone**, and with it `parallelCount`,
+  `offeredParallels` and `surplus`. `parallelLimit` replaces it as an explicit
+  opt-in ceiling, absent by default.
+- **Overclocks past the one-tick floor are not waste.** They multiply the
+  machine's cap, unconditionally, for every machine
+  (`calculateMultiplierUnderOneTick`). The old note here claiming they "invented
+  throughput nothing was feeding" was wrong about the game.
+- **The wiki's calculation order was wrong too.** GT resolves the machine, takes
+  the sub-tick multiplier from a one-parallel calculator, lets `ParallelHelper`
+  decide how many recipes run, and only then overclocks against that count.
 
-### The idea
+### What is left
 
-Model the machine's INPUT buses and hatches, and compute the parallel count from
-their capacity against the recipe's per-run input amounts, instead of asking the
-user for a figure they have to look up elsewhere.
+`determineParallel` in [src/domain/gt/parallel.ts](src/domain/gt/parallel.ts)
+takes an optional `inputLimit`, clamps on it, and reports `limitedBy: 'input'`.
+Nothing passes it. Filling it in means modelling the machine's **input** buses
+and hatches — not the energy hatches on `MultiblockRecipeData`, which describe
+how it is powered — and computing capacity against the recipe's per-run amounts.
 
-Note these are not the energy hatches already modelled on `MultiblockRecipeData`.
-Those describe how the machine is POWERED and are what the overclock math reads;
-this idea is about what FEEDS it items and fluids. Both are "hatches" in game.
-
-Roughly:
-
-```
-parallels = min(
-  floor(input capacity / recipe input per run),   // new — from hatch/bus config
-  floor(supplied EU/t / recipe EU/t),             // already implemented
-  machine cap,                                    // if such a cap exists, see below
-)
-```
-
-The power bound already exists in `parallelCount` in [src/domain/overclock.ts](src/domain/overclock.ts);
-this would add the input bound alongside it and drop the hand-entered field.
+When that lands, the node gains an input-bus shape and `inputLimit` is computed
+from it; `parallelLimit` can stay as the manual override or go, depending on
+whether the derived figure turns out to be trustworthy.
 
 ### To confirm in game first
 
-- Is the parallel count really bounded by bus/hatch capacity, or does each machine
-  carry its own cap independent of inputs? Possibly both, whichever is lower.
-- If there is a per-machine cap, what drives it — tier, upgrades, structure size?
-  That would need per-machine data the wiki does not currently tabulate.
 - Does "bus size" mean slot count, stack size per slot, or the product?
 - Do fluid hatches bound parallels differently from item buses?
 - How do stocking buses, crafting input buses and proxies change the picture?
-- Does anything change when the recipe has multiple distinct inputs of differing
-  quantities — presumably the tightest one binds.
+- With several distinct inputs of differing quantities, does the tightest bind?
 
-### Notes
+### Still true
 
-- Batch mode is a separate mechanic and must not be conflated: more recipes per
-  iteration at the _same_ EU/t over a _longer_ duration, for TPS only. It does not
-  raise throughput. Parallels raise EU/t and throughput at the same duration.
-- Calculation order is fixed by the wiki and already implemented: energy discount,
-  then parallels, then overclocks — `EU/t = Base x Discount x Parallels x 4^OC`.
-  Parallels are paid for first and routinely consume the headroom an overclock
-  would have used. That is a gain, not a loss: parallels are energy-neutral while
-  an imperfect overclock doubles total energy per step.
-- The entered count is now a hard ceiling: `overclock` never derives parallels from
-  spare power. It used to spend overclock steps past the 1 tick floor on doubling
-  them, which invented throughput nothing was feeding — a ULV recipe on a UV hatch
-  reported 4 parallels from an entered 1. Those steps are `surplus` now and raise
-  `throttled`, which is the honest answer until the input bound below exists.
-- When the input bound lands, `offeredParallels` and the `overparallel` issue both
-  go away with the hand-entered field: no user figure left to be wrong about, and
-  `throttled` becomes the only parallel-related issue.
-- Touch points when this gets built: `parallelCount` and the `Overclock` interface
-  in [src/domain/overclock.ts](src/domain/overclock.ts) — the interface carries a
-  single running `parallels` count, the old `parallelSteps` and `machineParallels`
-  having gone with the derived path — `MultiblockRecipeData` in
-  [src/contexts/productionStore/types.ts](src/contexts/productionStore/types.ts),
-  the machine row in
-  [src/components/production/nodes/recipeNode.tsx](src/components/production/nodes/recipeNode.tsx),
-  and `overclockIssues` in
-  [src/contexts/productionStore/helpers.ts](src/contexts/productionStore/helpers.ts).
+Batch mode is a separate mechanic and must not be conflated: more recipes per
+iteration at the _same_ EU/t over a _longer_ duration, for TPS only. It does not
+raise throughput, which is why the port leaves it out along with output limits
+and void protection.
 
-### Meanwhile
+## Verify the ported numbers against a running pack
 
-Two smaller tweaks, not yet done, that would help until the above lands:
-
-- ~~Relabel the field to `Max Parallel` and say in the tooltip that parallels fill
-  automatically from available inputs, so it does not read as a free choice.~~
-  Done — the `P` unit tooltip now says it is a ceiling, not a target.
-- Possibly flag a multiblock left at 1 parallel in the issue panel — though that
-  would be noise for the many multiblocks that genuinely have none.
+Nothing in the port has been checked in game. `MULTIBLOCK_PORT.md` ends with the
+list, in rough order of how likely each is to be wrong — the supply model
+(2 A per hatch, 1 A when there is exactly one) is first, because it changes the
+power figure on every saved multiblock.
