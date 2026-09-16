@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "note": "Append-only. Maps a legacy or shorthand name to a catalog machine id. Entries are only ever added: removing one orphans every saved graph that still holds that string.",
+  "byName": {}
+}

@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "gtVersion": "5.09.51.482",
+  "generatedAt": "2026-09-16T00:00:00.000Z",
+  "machines": [
+    {
+      "id": "electric_blast_furnace",
+      "name": "Electric Blast Furnace",
+      "aliases": [
+        "EBF"
+      ],
+      "role": "recipe",
+      "source": {
+        "className": "gregtech.common.tileentities.machines.multi.MTEElectricBlastFurnace",
+        "unlocalizedName": "multimachine.blastfurnace",
+        "mod": "gregtech",
+        "registeredIn": "src/main/java/gregtech/loaders/preload/LoaderMetaTileEntities.java",
+        "nameFrom": "registration"
+      },
+      "params": [
+        {
+          "id": "coil",
+          "kind": "coilTier",
+          "label": "Heating coils",
+          "help": "Every 900 K above the recipe discounts power by 5%; every 1800 K is an overclock that quarters the duration.",
+          "default": "cupronickel",
+          "primary": true,
+          "required": true
+        }
+      ],
+      "processing": {
+        "parallel": {
+          "kind": "none"
+        },
+        "amperageOC": true
+      },
+      "calculator": {
+        "heat": {
+          "heatOC": true,
+          "heatDiscount": true,
+          "machineHeat": {
+            "add": [
+              "param.coil.heat",
+              {
+                "mul": [
+                  100,
+                  {
+                    "sub": [
+                      "tier",
+                      2
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "recipeHeatFrom": "recipe.heat"
+        }
+      },
+      "confidence": "modelled",
+      "provenance": {
+        "identity": "manual",
+        "parallel": "default",
+        "processing": "manual",
+        "calculator": "manual",
+        "params": "manual"
+      }
+    },
+    {
+      "id": "large_chemical_reactor",
+      "name": "Large Chemical Reactor",
+      "aliases": [
+        "LCR"
+      ],
+      "role": "recipe",
+      "source": {
+        "className": "gregtech.common.tileentities.machines.multi.MTELargeChemicalReactor",
+        "unlocalizedName": "multimachine.chemicalreactor",
+        "mod": "gregtech",
+        "registeredIn": "src/main/java/gregtech/loaders/preload/LoaderMetaTileEntities.java",
+        "nameFrom": "registration"
+      },
+      "params": [],
+      "processing": {
+        "parallel": {
+          "kind": "none"
+        },
+        "overclock": {
+          "durationDecreasePerOC": 4,
+          "eutIncreasePerOC": 4
+        },
+        "amperageOC": true
+      },
+      "calculator": {},
+      "confidence": "modelled",
+      "provenance": {
+        "identity": "manual",
+        "parallel": "default",
+        "processing": "manual",
+        "calculator": "default",
+        "params": "none"
+      }
+    },
+    {
+      "id": "volcanus",
+      "name": "Volcanus",
+      "aliases": [
+        "Advanced Electric Blast Furnace",
+        "Adv EBF"
+      ],
+      "role": "recipe",
+      "source": {
+        "className": "gtPlusPlus.xmod.gregtech.common.tileentities.machines.multi.processing.advanced.MTEAdvEBF",
+        "unlocalizedName": "multimachine.adv.blastfurnace",
+        "mod": "gtplusplus",
+        "registeredIn": "src/main/java/gtPlusPlus/xmod/gregtech/registration/gregtech/GregtechIndustrialBlastSmelter.java",
+        "nameFrom": "registration"
+      },
+      "params": [
+        {
+          "id": "coil",
+          "kind": "coilTier",
+          "label": "Heating coils",
+          "help": "Volcanus reads the coil's own heat, without the EBF's voltage-tier bonus.",
+          "default": "cupronickel",
+          "primary": true,
+          "required": true
+        }
+      ],
+      "processing": {
+        "parallel": {
+          "kind": "constant",
+          "value": 8
+        },
+        "eutModifier": 0.9,
+        "durationModifier": {
+          "div": [
+            1,
+            2.2
+          ]
+        },
+        "amperageOC": true
+      },
+      "calculator": {
+        "heat": {
+          "heatOC": true,
+          "heatDiscount": true,
+          "machineHeat": "param.coil.heat",
+          "recipeHeatFrom": "recipe.heat"
+        }
+      },
+      "confidence": "modelled",
+      "provenance": {
+        "identity": "manual",
+        "parallel": "manual",
+        "processing": "manual",
+        "calculator": "manual",
+        "params": "manual"
+      }
+    }
+  ]
+}

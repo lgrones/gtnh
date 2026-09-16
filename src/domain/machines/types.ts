@@ -175,3 +175,197 @@ export interface GTConfigData {
   source: string;
   values: Record<string, number>;
 }
+
+// ---------------------------------------------------------------------------
+// the machine record
+// ---------------------------------------------------------------------------
+
+export type ModId =
+  | 'gregtech'
+  | 'gtplusplus'
+  | 'tectech'
+  | 'bartworks'
+  | 'bwcrossmod'
+  | 'gtnhintergalactic'
+  | 'kubatech'
+  | 'goodgenerator'
+  | 'kekztech'
+  | 'gtnhlanth'
+  | 'ggfab'
+  /** Not a GT machine at all — Ender Quarry, Stargate, Draconic Reactor */
+  | 'external';
+
+export interface MachineSource {
+  /** Fully qualified controller class — the extractor's stable key */
+  className: string;
+  unlocalizedName?: string;
+  mod: ModId;
+  /** Repo-relative path of the `new MTEx(...)` call site */
+  registeredIn?: string;
+  nameFrom: 'registration' | 'lang' | 'override' | 'manual';
+}
+
+export type ParallelModel =
+  /** The controller never calls setMaxParallel, so GT's default of 1 stands */
+  | { kind: 'none' }
+  | { kind: 'constant'; value: number }
+  | { kind: 'formula'; expr: Expr }
+  /** We could not read it. never silently treated as 1 */
+  | { kind: 'unknown'; reason: string; assume: number };
+
+/**
+ * Mirrors `gregtech.api.logic.ProcessingLogic`. Every field is optional and an
+ * absent one means GT's own default.
+ *
+ * Note that ProcessingLogic's setEuModifier/setSpeedBonus and
+ * OverclockCalculator's setEUtDiscount/setDurationModifier are the SAME two
+ * knobs — createOverclockCalculator forwards one to the other by assignment,
+ * not by multiplication — so the catalog carries one field for each pair, and a
+ * controller that sets both simply overwrites.
+ */
+export interface ProcessingConfig {
+  parallel: ParallelModel;
+  batchSize?: number;
+  /** ProcessingLogic.setEuModifier / OverclockCalculator.setEUtDiscount */
+  eutModifier?: Expr;
+  /** ProcessingLogic.setSpeedBonus / OverclockCalculator.setDurationModifier */
+  durationModifier?: Expr;
+  /** SetOverclock(timeReduction, powerIncrease) / enablePerfectOverclock() */
+  overclock?: { durationDecreasePerOC: number; eutIncreasePerOC: number };
+  /** Multiblocks set this per recipe in setProcessingLogicPower, so it is true */
+  amperageOC?: boolean;
+  maxTierSkips?: number | 'unlimited';
+  voidProtection?: boolean;
+}
+
+export interface HeatConfig {
+  /** SetHeatOC — an overclock per 1800 K of surplus, dividing duration by 4 */
+  heatOC: boolean;
+  /** SetHeatDiscount — a power discount per 900 K of surplus */
+  heatDiscount: boolean;
+  heatDiscountExponent?: number;
+  /** SetMachineHeat(...) — what the coil parameter feeds */
+  machineHeat: Expr;
+  /**
+   * SetRecipeHeat(recipe.mSpecialValue); explicit so an exception stays
+   * representable
+   */
+  recipeHeatFrom: 'recipe.heat';
+}
+
+export interface LaserConfig {
+  enabled: true;
+  amps: Expr;
+}
+
+/** Mirrors the `OverclockCalculator` setters a controller applies. */
+export interface CalculatorConfig {
+  noOverclock?: boolean;
+  maxOverclocks?: Expr;
+  maxRegularOverclocks?: Expr;
+  /** The machine computes its own base duration, like the Neutron Activator */
+  durationUnderOneTick?: boolean;
+  heat?: HeatConfig;
+  laser?: LaserConfig;
+}
+
+export type Confidence = 'modelled' | 'partial' | 'unknown';
+
+/**
+ * Where each section of a machine's data came from. `generated` is the
+ * extractor, `override` a curated patch, `manual` a hand-written entry,
+ * `default` GT's own default for a setter the controller never calls.
+ */
+export interface Provenance {
+  identity: 'generated' | 'override' | 'manual';
+  parallel: 'generated' | 'override' | 'manual' | 'default';
+  processing: 'generated' | 'override' | 'manual' | 'default';
+  calculator: 'generated' | 'override' | 'manual' | 'default';
+  params: 'generated' | 'override' | 'manual' | 'none';
+}
+
+export interface Machine {
+  /** Stable slug, the primary key. never changes, even when the name does */
+  id: string;
+  name: string;
+  /** Legacy names, wiki shorthand, tier family names — also feeds search */
+  aliases: string[];
+  role: 'recipe' | 'generator' | 'passive';
+  source: MachineSource;
+  params: MachineParam[];
+  processing: ProcessingConfig;
+  calculator: CalculatorConfig;
+  confidence: Confidence;
+  provenance: Provenance;
+  /** Why something is partial or unknown; surfaced in the UI */
+  notes?: string;
+}
+
+export interface MachineCatalog {
+  schemaVersion: number;
+  gtVersion: string;
+  generatedAt: string;
+  machines: Machine[];
+}
+
+// ---------------------------------------------------------------------------
+// resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * A node's machine parameter values, keyed by the ids the machine declares.
+ *
+ * A bag rather than named fields because the machine DATA declares which
+ * parameters exist; typing them here would put that declaration in two places
+ * and make adding a machine a TypeScript change. Safety comes back at the one
+ * read boundary, resolveMachine, which validates and defaults every value.
+ */
+export type MachineConfig = Record<string, string | number | boolean>;
+
+/** What the engine needs before a machine's formulas can be evaluated */
+export interface MachineContext {
+  /** GT voltage tier of the SUMMED hatch voltage */
+  tier: number;
+  amps: number;
+  recipe: { heat: number; eut: number; duration: number };
+}
+
+/** A machine with every formula evaluated against one node's configuration */
+export interface ResolvedMachine {
+  id: string;
+  name: string;
+  aliases: string[];
+  /** False when the name matched nothing and this is the fallback */
+  known: boolean;
+  /** False when GT's own rules do not apply — values pass through as entered */
+  modeled: boolean;
+
+  eutIncreasePerOC: number;
+  durationDecreasePerOC: number;
+  durationDecreasePerHeatOC: number;
+  eutModifier: number;
+  durationModifier: number;
+  amperageOC: boolean;
+  laserOC: boolean;
+  heatOC: boolean;
+  heatDiscount: boolean;
+  heatDiscountExponent: number;
+  maxOverclocks: number;
+  maxRegularOverclocks: number;
+  maxTierSkip: number;
+  noOverclock: boolean;
+
+  machineHeat: number;
+  maxParallel: number;
+  /** False when the parallel model is `unknown` and maxParallel is a guess */
+  parallelKnown: boolean;
+  laserAmps?: number;
+  /** The machine reads recipe heat, so the node should offer the field */
+  requiresHeat: boolean;
+
+  parameters: MachineParam[];
+  /** Every parameter's resolved value, for the UI and for error messages */
+  values: Record<string, ParamValue>;
+  confidence: Confidence;
+  notes?: string;
+}
