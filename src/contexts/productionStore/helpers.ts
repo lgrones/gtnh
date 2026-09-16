@@ -513,11 +513,14 @@ export interface GraphIssue {
     | 'incomplete'
     | 'mismatch'
     | 'underpowered'
+    | 'underheated'
     | 'throttled'
     | 'overparallel'
     | 'unmodeled';
   // deficit/surplus: the output's quantity and the demand on it
-  // overparallel: the parallels actually running and the ones entered
+  // overparallel: the parallels running under the node's ceiling, and the cap
+  //   the machine would otherwise have run
+  // underheated: the machine's heat and the recipe's, both in K
   supply?: number;
   demand?: number;
 }
@@ -533,14 +536,34 @@ const REQUIRED_RECIPE_FIELDS: {
   { label: 'duration', missing: data => data.time <= 0 },
 ];
 
-// overclock and parallel problems on a recipe node. Stage 8 of the port turns
-// these into their own kinds with the kernel's reasons attached; for now they
-// are the same four the panel already renders, restated against the port
+// overclock, heat and parallel problems on a recipe node, each phrased as the
+// thing the user can act on. The kernel already decided what happened; this
+// only picks which of its answers are worth interrupting someone about
 const overclockIssues = (data: RecipeNodeData): GraphIssue[] => {
   const recipe = data.name.trim() === '' ? 'Unnamed recipe' : data.name;
   const result = overclock(data);
   const issues: GraphIssue[] = [];
 
+  // a machine parameter the catalog marks required and the node never set. it
+  // runs on the declared default meanwhile, which for an EBF is Cupronickel —
+  // a real answer, but not this machine's
+  if (data.kind === 'multi')
+    for (const param of result.machine.parameters)
+      if (param.required === true && data.config?.[param.id] === undefined)
+        issues.push({ recipe, item: param.label, kind: 'incomplete' });
+
+  // GT would not accept the recipe at all: it matches on heat before anything
+  // else. reported ahead of power, because it is the harder stop of the two
+  if (result.underheated)
+    issues.push({
+      recipe,
+      item: result.machine.name === '' ? 'heat' : result.machine.name,
+      kind: 'underheated',
+      supply: result.heat.machine,
+      demand: result.heat.recipe,
+    });
+
+  // the supply cannot pay for even one recipe, so nothing runs
   if (result.underpowered)
     issues.push({
       recipe,
@@ -548,26 +571,23 @@ const overclockIssues = (data: RecipeNodeData): GraphIssue[] => {
       kind: 'underpowered',
     });
 
-  // the machine would run more recipes at once than its hatches can pay for.
-  // the metrics silently run the affordable count, so without this the missing
-  // throughput leaves no trace
-  if (
-    !result.underpowered &&
-    result.parallel.limitedBy === 'power' &&
-    result.parallel.running < result.parallel.effectiveCap
-  )
+  // a ceiling the user set, holding the machine below what it would otherwise
+  // run. deliberate, so it is a reminder rather than a fault — and it fires
+  // only when someone actually filled the field in
+  if (result.parallel.limitedBy === 'node')
     issues.push({
       recipe,
-      item: 'parallels',
+      item: 'parallel limit',
       kind: 'overparallel',
       supply: result.parallel.running,
       demand: result.parallel.effectiveCap,
     });
 
-  // overclocks that bought nothing. two ways that happens: a cap refused ones
-  // the supply would have paid for, or the one tick floor swallowed the time
-  // ones already charged for would have saved. the second is a singleblock
-  // problem — on a multiblock those come back as parallels, which is exactly
+  // overclocks that bought nothing and were charged for anyway — GT takes
+  // 4^n whether or not the duration moved. Two ways it happens: a cap refused
+  // ones the supply would have paid for, or the one tick floor swallowed the
+  // time ones already applied would have saved. the second is a singleblock
+  // problem; on a multiblock those come back as parallels, which is exactly
   // what a sub-tick multiplier above 1 means
   const spentForNothing =
     result.oc.wasted + (result.parallel.subTick > 1 ? 0 : result.oc.floored);
@@ -579,13 +599,11 @@ const overclockIssues = (data: RecipeNodeData): GraphIssue[] => {
       kind: 'throttled',
     });
 
-  // a name the catalog never heard of, or one whose parallel model the
-  // extractor could not read. either way the numbers are a guess
+  // a name the catalog never heard of, or one the extractor could not read out
+  // of GT's source. either way the numbers below it are a guess
   if (
     data.kind === 'multi' &&
-    (!result.machine.known ||
-      !result.machine.modeled ||
-      !result.machine.parallelKnown)
+    !(result.machine.known && result.machine.modeled)
   )
     issues.push({
       recipe,

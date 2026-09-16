@@ -31,7 +31,11 @@ export const IssuePanel = () => {
   );
 };
 
-const issueLabel = (issue: GraphIssue) => {
+// the explicit `string` is what makes the switch exhaustive: without it a new
+// GraphIssue kind widens the inferred return to `string | undefined`, which JSX
+// accepts silently. With it, adding a kind fails `types:check` here until it is
+// given a label — which is the point
+const issueLabel = (issue: GraphIssue): string => {
   switch (issue.kind) {
     case 'deficit':
       return `needs ${issue.demand}, supplies ${issue.supply}`;
@@ -44,13 +48,19 @@ const issueLabel = (issue: GraphIssue) => {
     case 'mismatch':
       return 'connected item names differ';
     case 'underpowered':
-      return 'hatches cannot run this recipe';
+      return 'not enough power to run even one recipe';
+    case 'underheated':
+      // GT matches a recipe on heat before anything else, so this is a hard
+      // "will not run", not a slower run
+      return `${issue.supply} K of machine heat, recipe needs ${issue.demand} K`;
     case 'overparallel':
-      return `${issue.demand} entered, hatches can only power ${issue.supply}`;
+      return `held at ${issue.supply}, the machine would run ${issue.demand}`;
     case 'throttled':
-      return 'unused, recipe already at 1 tick';
+      // GT charges 4^n for every overclock whether or not the duration moved,
+      // so these are paid for and wasted, not merely unavailable
+      return 'charged for but bought no time';
     case 'unmodeled':
-      return 'overclock not modelled, values used as entered';
+      return 'not in the machine catalog, values used as entered';
   }
 };
 

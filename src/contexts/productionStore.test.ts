@@ -1418,26 +1418,28 @@ describe('validateGraph — overclocking', () => {
     expect(overclock(recipeData(state().nodes[0]!.id)).parallels).toBe(4);
   });
 
-  it('flags a machine whose hatches cannot pay for the parallels it offers', () => {
-    // an Industrial Centrifuge on 4 EV hatches caps at 6 x IV = 30 parallels,
-    // but 16,384 EU/t only pays for eight 1,844 EU/t recipes
+  it('flags a ceiling the user set below what the machine would run', () => {
+    // an Industrial Centrifuge on 4 EV hatches caps at 6 x IV = 30 parallels
     multiblock({
       machine: 'Industrial Centrifuge',
       eu: 2048 * 20,
       time: 1,
       hatches: [{ tier: 'EV', count: 4, amps: 2 }],
+      parallelLimit: 5,
     });
 
     const issues = validateGraph(state().nodes, state().edges);
-    expect(kinds(issues)).toContain('overparallel');
-
     const issue = issues.find(entry => entry.kind === 'overparallel');
+    expect(issue?.supply).toBe(5);
     expect(issue?.demand).toBe(30);
-    expect(issue?.supply).toBe(8);
   });
 
-  it('does not flag a machine running its full cap', () => {
+  it('says nothing when only the power caps the parallels', () => {
+    // 16,384 EU/t pays for eight 1,844 EU/t recipes out of the machine's 30.
+    // that is the shape of almost every real multiblock, so flagging it would
+    // fire on nearly every node — it is not a user error
     multiblock({
+      machine: 'Industrial Centrifuge',
       eu: 2048 * 20,
       time: 1,
       hatches: [{ tier: 'EV', count: 4, amps: 2 }],
@@ -1452,6 +1454,45 @@ describe('validateGraph — overclocking', () => {
     expect(kinds(validateGraph(state().nodes, state().edges))).toContain(
       'unmodeled',
     );
+  });
+
+  it('flags a machine too cold for the recipe, which GT would not even match', () => {
+    multiblock({
+      machine: 'Electric Blast Furnace',
+      config: { coil: 'cupronickel' },
+      recipeHeat: 9000,
+      hatches: [{ tier: 'IV', count: 1, amps: 2 }],
+    });
+
+    const issues = validateGraph(state().nodes, state().edges);
+
+    const issue = issues.find(entry => entry.kind === 'underheated');
+    expect(issue?.supply).toBe(2101); // 1,801 of coil + 100 x (IV - MV)
+    expect(issue?.demand).toBe(9000);
+    // too cold is a harder stop than too weak, and only one of them is true
+    expect(kinds(issues)).not.toContain('underpowered');
+  });
+
+  it('flags a required machine parameter the node never set', () => {
+    multiblock({ machine: 'Electric Blast Furnace', recipeHeat: 1800 });
+
+    const issues = validateGraph(state().nodes, state().edges);
+    const issue = issues.find(entry => entry.kind === 'incomplete');
+    expect(issue?.item).toBe('Heating coils');
+  });
+
+  it('says nothing once that parameter is set', () => {
+    multiblock({
+      machine: 'Electric Blast Furnace',
+      recipeHeat: 1800,
+      config: { coil: 'nichrome' },
+    });
+
+    expect(
+      validateGraph(state().nodes, state().edges).filter(
+        issue => issue.kind === 'incomplete',
+      ),
+    ).toEqual([]);
   });
 
   it('never raises the multiblock-only issues for a singleblock', () => {
