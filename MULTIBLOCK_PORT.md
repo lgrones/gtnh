@@ -113,11 +113,13 @@ graph holds — 244 subclasses, 214 of them concrete.
 | 4     | `src/domain/machines/{merge,catalog,customFormulas}.ts`, `src/data/gt/*`, `src/data/machines.json`                     | `dfa133f` |
 | 5     | `src/tools/gtSource/*.ts` + `src/tools/extractMachines.test.ts`; `src/data/gt/{raw.machines,aliases}.json` regenerated | `80089a7` |
 | 6 + 7 | store types and migration; `src/domain/overclock.ts` swapped onto the port and `multiblocks.ts` deleted                | `3c7bc19` |
+| 8     | `GraphIssue` gains `underheated`; the overclock kinds re-aimed at the kernel's answers                                 | `56c3772` |
+| 9     | node UI — machine parameters, recipe heat, rewritten `Calculations`                                                    | pending   |
 
-332 tests pass, and `pnpm validate` and `pnpm build` are both clean. **The app
-now runs on the port** — stages 6 and 7 landed together, for the reason set out
-below, so `src/domain/overclock.ts` is a facade over `src/domain/gt/` and the
-old five-mode heuristic is gone.
+**All nine stages are in.** 335 tests pass, `pnpm validate` and `pnpm build` are
+clean, and the app was driven in a browser against the Firebase emulators to
+confirm the node renders (see "Checked in the app", below). What remains is
+checking the numbers against a running pack.
 
 Every expected value in the kernel tests was worked through by hand against the
 Java before the code was written. Notable pinned results:
@@ -184,10 +186,10 @@ are reserved for it.
 
 ## Still to do
 
-| Stage | What                                                                |
-| ----- | ------------------------------------------------------------------- |
-| 8     | `GraphIssue` kinds and the issue panel                              |
-| 9     | Node UI — machine parameters, recipe heat, rewritten `Calculations` |
+Nothing in the staged plan. The open work is the in-game verification listed at
+the bottom of this document, and the input bound (`inputLimit` in `parallel.ts`,
+see `TODO.md`) — GT's last parallel clamp, whose seam is in place and whose
+argument nothing passes yet.
 
 The full plan, including the design rationale for each stage, is at
 `~/.claude/plans/continuing-with-the-multilocks-declarative-turtle.md`. Read its
@@ -295,6 +297,99 @@ these into their own kinds with the kernel's reasons attached.
 
 The list under "Verify against the game" below is unchanged and still the
 highest-value next thing. Nothing here has been checked against a running pack.
+
+## Stage 8 — what the port reports
+
+`GraphIssue` goes from nine kinds to ten, and `issueLabel`'s switch is what
+keeps them honest: it is annotated `: string`, so a new kind without a label
+fails `types:check` rather than rendering `undefined` through JSX. (The
+annotation is the enforcement; `noFallthroughCasesInSwitch` alone is not.)
+
+- **`underheated`, new.** The machine is colder than the recipe. A hard "will
+  not run", because GT matches on heat before anything else. Carries both heats
+  in K.
+- **`underpowered`, sharpened** to `parallel.running === 0` — the supply cannot
+  pay for a single recipe.
+- **`throttled`, redefined** as overclocks charged for that bought nothing:
+  `oc.wasted` plus `oc.floored` where no sub-tick multiplier absorbed them. GT
+  takes `4^n` regardless, so the label says charged for rather than unavailable.
+- **`overparallel`, narrowed** to `parallel.limitedBy === 'node'`. It no longer
+  fires when power alone caps the parallels — that is the shape of almost every
+  real multiblock and not a user error.
+- **`unmodeled`, narrowed** to not in the catalog or `unknown` confidence.
+  `parallelKnown` is implied by the latter; no machine has one without the other.
+- A **required machine parameter** the node never set folds into the existing
+  `incomplete`, read off `resolveMachine(...).parameters` rather than a second
+  hand-kept list. Eleven machines declare one.
+
+## Stage 9 — the node
+
+The rule was: nothing renders unless the selected machine asks for it, and at
+most one machine parameter is ever inline.
+
+- `ParamField` renders one declared parameter — `coilTier`, `voltageTier`,
+  `count`, `enum`, `boolean` — from the catalog's declaration alone. The two
+  casing-ladder kinds return `null`; `resolveMachine` throws on them and a guard
+  test asserts no machine declares one, so they are unreachable by construction.
+- The **one `primary` parameter is inline** next to `HatchField`: an EBF shows
+  its coil `Select` with no clicks. Everything today is primary and no machine
+  declares more than one, so the gear currently holds only the ceiling — but the
+  shape is there for when the extractor reads more.
+- `MachineSettings` is the gear: non-primary parameters, then a "Limits" divider
+  and `parallelLimit`, whose placeholder is the machine's own cap so an empty
+  field visibly means "whatever the machine does". Dotted when anything differs
+  from what the machine would do on its own.
+- The machine `Select` **keeps an unresolvable saved name selectable**, as
+  `"<name> (not in catalog)"`. Mantine renders blank when `value` is not in
+  `data`, and the next edit to any other field would then persist `machine: ''`.
+  The synthetic entry is filtered out of search, so it can never be chosen.
+- The **recipe heat** `NumberInput` sits with EU / s / A, because `mSpecialValue`
+  is a property of the recipe as NEI prints it. Shown only for the three
+  machines that read heat at all.
+- `Calculations` shows **ticks first, seconds in brackets** — the one-tick floor
+  and the `(int)` truncation are invisible in seconds. New conditional rows for
+  heat (discounts and heat overclocks share the subtraction they come from) and
+  for parallels (`30 of 30`, with a tooltip naming `limitedBy` and the sub-tick
+  multiplier). Every formula carries every factor GT applied, the machine's own
+  modifiers and the heat discount included: a row reading `120 x 4^3` next to
+  6,256 is an invitation to go hunting for an arithmetic error that is not there.
+- `overclockDetail()` answers, in the order the questions stop mattering:
+  underheated, underpowered, nothing entered, not in the catalog, what the
+  overclocks did, and finally why there were none. That last string used to say
+  an overclock "needs a full tier of headroom" — the heuristic's lie, and the
+  reason for this whole migration. It now says what GT actually compares: the
+  supply against a multiple of the draw.
+
+## Checked in the app
+
+Driven in headless Chromium against `pnpm dev` + `pnpm emulators`, signed in as
+a throwaway emulator account. No console errors. The pinned EBF case renders as
+the tests say it should:
+
+```
+Power   120 EU/t × 0.95^4 × 4^3 →   6,256 EU/t
+Time    600t ÷ 4^2 ÷ 2^1 →          18t (0.9s)
+Tier    MV →                        IV
+Heat    5,701 − 1,800 =             3,901 K · 4 discounts, 2 OC
+Overclock                           3× (2 heat)
+```
+
+and an Industrial Centrifuge on 4 EV hatches:
+
+```
+Power      60 EU/t × 30P × 0.9 × 4^1 →  6,480 EU/t
+Time       200t ÷ 2.25 ÷ 2^1 →          44t (2.2s)
+Parallels                               30 of 30
+```
+
+The coil `Select`, the settings gear with its ceiling field, the conditional
+heat field (present on the EBF, absent on the Centrifuge) and both tooltips all
+render. The issue panel showed `Heating coils: not set` against a saved EBF node
+from before the migration, which is the stage 8 `incomplete` pass working on
+real persisted data.
+
+Reproducing it needs `playwright-core` driving `/usr/bin/chromium`; there is no
+component-test setup in this repo and this did not add one.
 
 ## Commands
 
