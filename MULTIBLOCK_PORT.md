@@ -194,6 +194,78 @@ The full plan, including the design rationale for each stage, is at
 `~/.claude/plans/continuing-with-the-multilocks-declarative-turtle.md`. Read its
 stage 6 against the decision below, which supersedes part of it.
 
+### Stage 6 is started and stashed
+
+`git stash list` holds one entry:
+
+```
+stage 6 WIP: EnergyHatch.amps + config/recipeHeat/parallelLimit + migration
+```
+
+It touches only `productionStore/{types,helpers}.ts` (~76 lines) and **does not
+typecheck on its own** — that is the finding, not a defect in it. `git stash pop`
+to pick it up. What it already does:
+
+- `EnergyHatch` gains a required `amps: number`, with `DEFAULT_HATCH_AMPS = 2`
+  exported next to it. Required rather than optional because `normalizeNodes`
+  backfills it, so nothing downstream should have to ask twice.
+- `MultiblockRecipeData` gains `config?`, `recipeHeat?` and `parallelLimit?`,
+  with `overclock?`/`parallels?` left in place and marked `@deprecated`.
+- `RecipeFields` swaps `overclock`/`parallels` for the three new fields.
+- `PersistedRecipe` keeps `overclock?`/`parallels?` as v1 read-only forever, and
+  takes `hatches` with `amps` optional — a saved hatch has none, and filling it
+  in is what the backfill is for.
+- `needsBackfill` additionally fires when any hatch lacks `amps`, or when
+  `overclock`/`parallels` are present. `normalizeNodes` fills the amps, drops
+  those two fields, and spreads the three new optional ones **conditionally** —
+  writing `config: undefined` puts an explicit undefined key in the object,
+  which survives `JSON.stringify` inconsistently across the `historyKey`,
+  `isDeepEqual` and Yjs paths and shows up as spurious history entries.
+
+There is no `v` schema stamp, per decision 7.
+
+### Why 6 and 7 have to land together
+
+Stage 6 cannot be green alone, and the plan's "additive" label is wrong about
+this. Once `normalizeNodes` strips `parallels`, the old heuristic in
+`src/domain/overclock.ts` reads `undefined` and silently runs every multiblock
+at one parallel. And `recipeNode.tsx` patches `data.parallels` and
+`data.overclock` through `RecipeFields`, which no longer carries them, so the
+build breaks in the UI as well.
+
+So: pop the stash, then do stage 7 in the same commit. Making `amps` required
+also breaks every hatch literal in the tests — `productionStore.test.ts` around
+lines 1423-1624 and `overclock.test.ts` throughout — which is mechanical, and
+`overclock.test.ts` is being rewritten anyway.
+
+### Stage 7's blast radius, already surveyed
+
+Only four files import the engine or the old catalog:
+
+| File                                         | What it needs                                                                                                                                                                                |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contexts/productionStore/helpers.ts`        | `overclock()` at four call sites: `recipeScale` (`.parallels`), `overclockIssues`, `recipePower` (`.power`), `recipeTime` (`.time`). Also imports `findMultiblock` for the `unmodeled` issue |
+| `components/production/nodes/recipeNode.tsx` | the parallels `NumberInput` (~line 260), the overclock-mode `Select` (~282), `HatchField`'s two `{ tier: 'LV', count: 1 }` literals (~528, ~603), and `Calculations`                         |
+| `contexts/productionStore.test.ts`           | imports `overclock` directly; hatch literals                                                                                                                                                 |
+| `domain/overclock.test.ts`                   | rewritten wholesale                                                                                                                                                                          |
+
+`src/domain/multiblocks.ts` (241 lines) is then unreferenced and gets deleted.
+
+Keep the result-object shape the plan specifies — `oc.{total, regular, heat,
+laser, available, wasted, clampedBy}`, `parallel.{running, machineCap, powerCap,
+subTick, nodeLimit, limitedBy}` and the rest — because stages 8 and 9 are
+written against it. Keep `parallels` as an alias for `parallel.running` so
+`recipeScale` does not move. Memoise the facade in a
+`WeakMap<RecipeNodeData, Overclock>`: it now does a catalog lookup and a config
+resolve, and `normalizeNodes`' identity return is what makes the cache safe.
+
+The kernel's entry points are `calculateOverclock(OverclockInput)` and
+`determineParallel(ParallelInput)` in `src/domain/gt/`, plus
+`calculateMultiplierUnderOneTick` for the sub-tick multiplier that
+`ParallelHelper` applies before every other clamp. `resolveMachine(machine,
+config, context)` in `src/domain/machines/catalog.ts` turns a node's config into
+the flat numbers both of them take.
+
 ## Commands
 
 ```bash
