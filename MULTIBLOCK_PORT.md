@@ -114,7 +114,7 @@ graph holds — 244 subclasses, 214 of them concrete.
 | 5     | `src/tools/gtSource/*.ts` + `src/tools/extractMachines.test.ts`; `src/data/gt/{raw.machines,aliases}.json` regenerated | `80089a7` |
 | 6 + 7 | store types and migration; `src/domain/overclock.ts` swapped onto the port and `multiblocks.ts` deleted                | `3c7bc19` |
 | 8     | `GraphIssue` gains `underheated`; the overclock kinds re-aimed at the kernel's answers                                 | `56c3772` |
-| 9     | node UI — machine parameters, recipe heat, rewritten `Calculations`                                                    | pending   |
+| 9     | node UI — machine parameters, recipe heat, rewritten `Calculations`                                                    | `a765c69` |
 
 **All nine stages are in.** 335 tests pass, `pnpm validate` and `pnpm build` are
 clean, and the app was driven in a browser against the Firebase emulators to
