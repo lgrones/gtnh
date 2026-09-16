@@ -9,6 +9,12 @@ import {
 } from '@xyflow/react';
 import { type StoreApi } from 'zustand';
 
+import type { MachineConfig } from '@/domain/machines/types';
+
+// re-exported so a node's own fields can be typed without reaching into the
+// domain layer for the one bag the store persists
+export type { MachineConfig };
+
 export type ProductionNodeType =
   | 'inputNode'
   | 'outputNode'
@@ -70,9 +76,9 @@ export type InputNodeData = SinkNodeData;
 export type OutputNodeData = SinkNodeData;
 export type DisposalNodeData = SinkNodeData;
 
-// which of the two machine shapes a recipe node represents. singleblocks keep
-// the original free-text/no-overclock behaviour; multiblocks pick their machine
-// from the catalog (@/domain/multiblocks) and overclock against their hatches
+// which of the two machine shapes a recipe node represents. a singleblock is
+// free text and is fed by its own tier; a multiblock picks its machine from the
+// generated catalog (@/domain/machines) and is fed by its hatches
 export type RecipeKind = 'single' | 'multi';
 
 // one group of identical energy hatches feeding a multiblock. the common case is
@@ -80,7 +86,16 @@ export type RecipeKind = 'single' | 'multi';
 export interface EnergyHatch {
   tier: VoltageTier;
   count: number;
+  // maxWorkingAmperesIn for one hatch of this group. every standard GT energy
+  // hatch takes 2 A; laser and wireless hatches take far more, which is the
+  // only reason this is a field and not a constant. GT reads it as
+  // getMaxInputAmps() — the sum over every hatch — and that is a different
+  // quantity from the tier sum the parallel formulas use
+  amps: number;
 }
+
+// what every standard GT energy hatch delivers
+export const DEFAULT_HATCH_AMPS = 2;
 
 // the fields both machine shapes share. how each is FED differs — a singleblock
 // by its own tier, a multiblock by its energy hatches — so those live on their
@@ -106,20 +121,31 @@ export interface SingleblockRecipeData extends BaseRecipeNodeData {
 
 export interface MultiblockRecipeData extends BaseRecipeNodeData {
   kind: 'multi';
-  hatches: EnergyHatch[]; // what feeds it — their summed EU/t is its supply
-  // only meaningful for catalog entries classed `mixed`, which can overclock
-  // either way; ignored for every other machine. defaults to imperfect
-  overclock?: 'imperfect' | 'perfect';
-  // concurrent recipes the machine offers. the wiki tabulates no per-machine
-  // figure, so it is entered per node; absent means 1. only as many as the
-  // supplied power can pay for actually run
-  parallels?: number;
+  // what feeds it. GT reads three different numbers off this list — see
+  // hatchSupply in @/domain/overclock
+  hatches: EnergyHatch[];
+
+  // the machine's own parameters — which coils are in it, what tier its pipe
+  // casings are. a bag rather than named fields because the machine DATA
+  // declares which parameters exist; typing them here would put that
+  // declaration in two places and make adding a machine a TypeScript change.
+  // safety comes back at the one read boundary, resolveMachine, which validates
+  // and defaults every value. absent means every parameter at its default
+  config?: MachineConfig;
+
+  // the recipe's mSpecialValue in K, as NEI prints it. a property of the RECIPE,
+  // not the machine, and only offered when the machine reads heat at all
+  recipeHeat?: number;
+
+  // an optional ceiling the user puts on parallels. absent means the machine's
+  // own cap stands, which is the normal case now that the cap is real data
+  parallelLimit?: number;
 }
 
 export type RecipeNodeData = SingleblockRecipeData | MultiblockRecipeData;
 
 // the scalar fields `updateRecipe` may patch. spelled out rather than Pick'd off
-// the union, since `overclock` and `kind` exist on only one arm of it
+// the union, since `kind` and the power fields exist on only one arm of it
 export interface RecipeFields extends Pick<
   BaseRecipeNodeData,
   'machine' | 'multiplier' | 'eu' | 'time'
@@ -128,8 +154,9 @@ export interface RecipeFields extends Pick<
   voltage: VoltageTier;
   amperage: number;
   hatches: EnergyHatch[];
-  overclock?: 'imperfect' | 'perfect';
-  parallels?: number;
+  config?: MachineConfig;
+  recipeHeat?: number;
+  parallelLimit?: number;
 }
 
 // node typed per variant so data matches the node `type`

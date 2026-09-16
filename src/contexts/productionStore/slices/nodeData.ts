@@ -1,7 +1,9 @@
 import { mapRecipe, syncMirrors } from '../helpers';
 import {
   type BaseRecipeNodeData,
+  DEFAULT_HATCH_AMPS,
   type EnergyHatch,
+  type MachineConfig,
   type ProductionNode,
   type ProductionState,
   type RecipeKind,
@@ -109,25 +111,28 @@ export const createNodeDataSlice: SliceCreator<NodeDataSlice> = (set, get) => ({
         kind: RecipeKind;
         voltage?: VoltageTier;
         hatches?: EnergyHatch[];
-        overclock?: 'imperfect' | 'perfect';
-        parallels?: number;
+        config?: MachineConfig;
+        recipeHeat?: number;
+        parallelLimit?: number;
       } = { ...data, ...patch };
 
       if (merged.kind === 'multi') {
         // carry a singleblock's tier over as one hatch group, so switching
         // shape keeps the machine roughly where the user had it
         const hatches = merged.hatches ?? [
-          { tier: merged.voltage ?? 'LV', count: 1 },
+          { tier: merged.voltage ?? 'LV', count: 1, amps: DEFAULT_HATCH_AMPS },
         ];
         delete merged.voltage;
         return { ...merged, kind: 'multi', hatches };
       }
 
       const voltage = merged.voltage ?? merged.hatches?.[0]?.tier ?? 'LV';
-      // hatches, parallels and the overclock choice belong to multiblocks only
+      // hatches, the machine's own parameters, the recipe's heat and the
+      // parallel ceiling all belong to multiblocks only
       delete merged.hatches;
-      delete merged.parallels;
-      delete merged.overclock;
+      delete merged.config;
+      delete merged.recipeHeat;
+      delete merged.parallelLimit;
       return { ...merged, kind: 'single', voltage };
     });
     set({ nodes: syncMirrors(nodes, get().edges) });

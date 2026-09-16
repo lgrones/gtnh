@@ -27,16 +27,13 @@ import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { useShallow } from 'zustand/shallow';
 
 import {
+  DEFAULT_HATCH_AMPS,
   useProductionStore,
   VOLTAGE_TIERS,
   type EnergyHatch,
   type ProductionNode as IProductionNode,
 } from '@/contexts/productionStore';
-import {
-  findMultiblock,
-  matchesMultiblock,
-  MULTIBLOCKS,
-} from '@/domain/multiblocks';
+import { MACHINE_OPTIONS, matchesMachine } from '@/domain/machines/catalog';
 import {
   basePower,
   overclock,
@@ -52,7 +49,6 @@ import classes from './productionNode.module.css';
 
 type RecipeNodeType = Extract<IProductionNode, { type: 'recipeNode' }>;
 
-const MULTIBLOCK_OPTIONS = MULTIBLOCKS.map(x => x.name);
 const fmt = (value: number) =>
   value.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
@@ -80,10 +76,6 @@ const KIND_OPTIONS = [
   { value: 'single', label: 'Single' },
   { value: 'multi', label: 'Multi' },
 ];
-const OVERCLOCK_OPTIONS = [
-  { value: 'imperfect', label: 'Imperfect (2x/4x)' },
-  { value: 'perfect', label: 'Perfect (4x/4x)' },
-];
 
 export const RecipeNode = ({
   id,
@@ -109,6 +101,11 @@ export const RecipeNode = ({
       updateRecipe: state.updateRecipe,
     })),
   );
+
+  // the machine's declared parallel cap, for the ceiling field's placeholder.
+  // overclock() is memoised per node data, so this costs nothing beyond the
+  // lookup Calculations below already pays for
+  const machineCap = overclock(data).parallel.machineCap;
 
   // focus the newest item's name field when a row is added — driven by the add
   // event, not a length-diff effect. the flag is set on add, then consumed by
@@ -180,7 +177,7 @@ export const RecipeNode = ({
               flex={1}
               searchable
               placeholder="Multiblock"
-              data={MULTIBLOCK_OPTIONS}
+              data={MACHINE_OPTIONS}
               value={data.machine === '' ? null : data.machine}
               onChange={value => updateRecipe(id, { machine: value ?? '' })}
               // the options are flat strings, so anything with a `value` is an
@@ -188,8 +185,7 @@ export const RecipeNode = ({
               filter={({ options, search }) =>
                 options.filter(
                   option =>
-                    'value' in option &&
-                    matchesMultiblock(option.value, search),
+                    'value' in option && matchesMachine(option.value, search),
                 )
               }
               comboboxProps={{ width: 280 }}
@@ -248,44 +244,35 @@ export const RecipeNode = ({
               <Group gap="sm">
                 <HatchField id={id} hatches={data.hatches} />
 
+                {/* the machine's own cap is real data now, so this is a
+                    ceiling the user opts into rather than a number they have
+                    to know. empty means "whatever the machine can do" */}
                 <NumberInput
-                  w={70}
+                  w={78}
                   min={1}
                   hideControls
                   allowNegative={false}
                   allowDecimal={false}
-                  value={data.parallels ?? 1}
+                  placeholder={String(machineCap)}
+                  value={data.parallelLimit ?? ''}
                   onChange={value =>
                     updateRecipe(id, {
-                      parallels: typeof value === 'number' ? value : 1,
+                      parallelLimit:
+                        typeof value === 'number' && value > 0
+                          ? value
+                          : undefined,
                     })
                   }
                   rightSection={
                     <Unit
                       abbr="P"
                       w={260}
-                      label="Max parallels. A multiblock fills these from whatever its input buses and hatches can feed it per cycle, so this is a ceiling, not a target — spare power alone never adds one."
+                      label={`Parallel ceiling. Left empty the machine runs its own cap, which is ${machineCap} here — set this only to hold it below what its buses can actually feed.`}
                     />
                   }
                   rightSectionPointerEvents="auto"
                   rightSectionWidth={26}
                 />
-
-                {/* only `mixed` machines can do either, so only they get the choice */}
-                {findMultiblock(data.machine)?.overclock === 'mixed' && (
-                  <Select
-                    w={160}
-                    data={OVERCLOCK_OPTIONS}
-                    value={data.overclock ?? 'imperfect'}
-                    onChange={value =>
-                      updateRecipe(id, {
-                        overclock:
-                          value === 'perfect' ? 'perfect' : 'imperfect',
-                      })
-                    }
-                    comboboxProps={{ width: 'auto' }}
-                  />
-                )}
               </Group>
             </Box>
           </>
@@ -525,7 +512,10 @@ const HatchField = ({
 
   const set = (next: EnergyHatch[]) =>
     updateRecipe(id, {
-      hatches: next.length > 0 ? next : [{ tier: 'LV', count: 1 }],
+      hatches:
+        next.length > 0
+          ? next
+          : [{ tier: 'LV', count: 1, amps: DEFAULT_HATCH_AMPS }],
     });
 
   const only = hatches.length === 1 ? hatches[0] : undefined;
@@ -600,7 +590,12 @@ const HatchField = ({
             size="xs"
             variant="subtle"
             leftSection={<IconPlus size={14} />}
-            onClick={() => set([...hatches, { tier: 'LV', count: 1 }])}
+            onClick={() =>
+              set([
+                ...hatches,
+                { tier: 'LV', count: 1, amps: DEFAULT_HATCH_AMPS },
+              ])
+            }
           >
             Add tier
           </Button>
@@ -714,32 +709,55 @@ const Calculations = ({ data }: { data: RecipeNodeType['data'] }) => {
   const base = basePower(data.eu, data.time);
   const baseTier = recipeTier(base);
   const supply = suppliedPower(data);
+  const { oc, parallel } = result;
+
   const powerFactors =
     `${fmt(base)} EU/t` +
     (result.parallels > 1 ? ` × ${result.parallels}P` : '') +
-    (result.steps > 0 ? ` × 4^${result.steps}` : '');
+    (oc.total > 0 ? ` × ${result.machine.eutIncreasePerOC}^${oc.total}` : '');
 
   // the short answer goes in the row; the reasoning hangs off it
   const overclockLabel =
-    result.steps > 0 ? `${result.steps}× ${result.mode}` : 'none';
+    oc.total > 0
+      ? `${oc.total}×` +
+        (oc.heat > 0 ? ` (${oc.heat} heat)` : '') +
+        (oc.laser > 0 ? ` (${oc.laser} laser)` : '')
+      : 'none';
 
   const overclockDetail = () => {
-    if (result.steps > 0)
-      return (
-        `${result.mode === 'perfect' ? 'Each step quarters the duration' : 'Each step halves the duration'} and quadruples the power.` +
-        (result.surplus > 0
-          ? ` ${result.surplus} more the supply could pay for went unused — the recipe is already at the 1 tick floor, and extra power cannot run parallels the machine is not fed for.`
-          : '')
-      );
+    if (result.underheated)
+      return `${result.machine.name} runs at ${fmt(result.heat.machine)} K and this recipe needs ${fmt(result.heat.recipe)} K, so it would not accept it at all. The figures are as entered.`;
     if (result.underpowered)
       return `The supply of ${fmt(supply)} EU/t cannot even run the recipe's ${fmt(base)} EU/t.`;
-    if (result.mode === 'none') return 'This machine cannot overclock at all.';
-    if (result.mode === 'unique')
-      return 'This machine follows its own overclock rules, which are not modelled — the figures are as entered.';
+    if (!result.machine.known)
+      return 'This machine is not in the catalog, so it runs GregTech’s plain rules at one parallel.';
 
-    const next = tierAbove(result.recipe);
+    if (oc.total > 0)
+      return (
+        `Each overclock costs ${result.machine.eutIncreasePerOC}× the power. ` +
+        `${oc.regular} divide the duration by ${result.machine.durationDecreasePerOC}` +
+        (oc.heat > 0
+          ? ` and ${oc.heat} heat overclock${oc.heat > 1 ? 's' : ''} divide it by ${result.machine.durationDecreasePerHeatOC}`
+          : '') +
+        '.' +
+        (parallel.subTick > 1
+          ? ` Past the one tick floor they buy parallels instead: ×${parallel.subTick}.`
+          : '') +
+        (oc.wasted > 0
+          ? ` ${oc.wasted} more the supply could pay for went unused — ${
+              oc.clampedBy === 'voltageTier'
+                ? 'this machine does not overclock across amperage'
+                : 'the machine caps how many it will take'
+            }.`
+          : '')
+      );
+
+    if (result.machine.noOverclock)
+      return 'This machine cannot overclock at all.';
+
+    const next = tierAbove(result.demand);
     if (next === undefined) return 'Already at the top tier.';
-    return `An overclock needs a full tier of headroom, not merely 4× the draw. This needs ${next} (${fmt(RECIPE_TIER_EU[next])} EU/t); it is fed ${result.supplied} (${fmt(supply)} EU/t).`;
+    return `An overclock needs four times the recipe's draw behind it. This draws ${fmt(result.power)} EU/t and is fed ${fmt(supply)} EU/t — ${next} (${fmt(RECIPE_TIER_EU[next])} EU/t) would buy one.`;
   };
 
   return (
@@ -774,8 +792,12 @@ const Calculations = ({ data }: { data: RecipeNodeType['data'] }) => {
           <Row
             label="Time"
             formula={
-              result.steps > 0
-                ? `${fmt(data.time)}s ÷ ${result.divisor}^${result.steps} →`
+              oc.total > 0
+                ? `${fmt(data.time)}s ÷ ${result.machine.durationDecreasePerOC}^${oc.regular}` +
+                  (oc.heat > 0
+                    ? ` ÷ ${result.machine.durationDecreasePerHeatOC}^${oc.heat}`
+                    : '') +
+                  ' →'
                 : undefined
             }
             value={`${fmt(result.time)}s`}
@@ -791,12 +813,20 @@ const Calculations = ({ data }: { data: RecipeNodeType['data'] }) => {
 
           <Row
             label="Tier"
-            formula={baseTier === result.recipe ? undefined : `${baseTier} →`}
-            value={result.recipe}
+            formula={baseTier === result.demand ? undefined : `${baseTier} →`}
+            value={result.demand}
           />
 
           {result.parallels > 1 && (
-            <Row label="Parallels" value={String(result.parallels)} />
+            <Row
+              label="Parallels"
+              formula={
+                parallel.limitedBy === 'machine'
+                  ? undefined
+                  : `${parallel.limitedBy}-limited →`
+              }
+              value={String(result.parallels)}
+            />
           )}
 
           <Row

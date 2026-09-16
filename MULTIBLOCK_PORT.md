@@ -5,9 +5,9 @@ work can be picked up in a fresh session without re-deriving anything.
 
 ## Why
 
-`src/domain/multiblocks.ts` sorts ~145 machines into five overclock modes copied
-from the wiki, and `MultiblockRecipeData.parallels` is a number the user types
-in. Neither survives contact with the game: parallels follow no single formula,
+`src/domain/multiblocks.ts` sorted ~145 machines into five overclock modes
+copied from the wiki, and `MultiblockRecipeData.parallels` was a number the user
+typed in. Neither survived contact with the game: parallels follow no single formula,
 some machines cap hard, others scale with voltage tier or structure blocks, and
 the EBF family pays _less_ EU the better its coils.
 
@@ -111,12 +111,13 @@ graph holds — 244 subclasses, 214 of them concrete.
 | 2     | `src/domain/gt/{overclockCalculator,parallel}.ts` — the port                                                           | `64a4f1a` |
 | 3     | `src/domain/machines/{types,expr}.ts`, `src/data/{coils,gtConfig}.json`                                                | `0b36989` |
 | 4     | `src/domain/machines/{merge,catalog,customFormulas}.ts`, `src/data/gt/*`, `src/data/machines.json`                     | `dfa133f` |
-| 5     | `src/tools/gtSource/*.ts` + `src/tools/extractMachines.test.ts`; `src/data/gt/{raw.machines,aliases}.json` regenerated | pending   |
+| 5     | `src/tools/gtSource/*.ts` + `src/tools/extractMachines.test.ts`; `src/data/gt/{raw.machines,aliases}.json` regenerated | `80089a7` |
+| 6 + 7 | store types and migration; `src/domain/overclock.ts` swapped onto the port and `multiblocks.ts` deleted                | pending   |
 
-323 tests pass; types and lint clean, and format is clean apart from
-`src/domain/overclock.ts`, which already drifted on main. **Nothing is wired
-into the app yet** — `src/domain/overclock.ts` still runs the old heuristic, so
-behaviour is unchanged.
+332 tests pass, and `pnpm validate` and `pnpm build` are both clean. **The app
+now runs on the port** — stages 6 and 7 landed together, for the reason set out
+below, so `src/domain/overclock.ts` is a facade over `src/domain/gt/` and the
+old five-mode heuristic is gone.
 
 Every expected value in the kernel tests was worked through by hand against the
 Java before the code was written. Notable pinned results:
@@ -183,88 +184,117 @@ are reserved for it.
 
 ## Still to do
 
-| Stage | What                                                                              |
-| ----- | --------------------------------------------------------------------------------- |
-| 6     | Store types and migration (`config`, `recipeHeat`, `parallelLimit`, hatch `amps`) |
-| 7     | Swap `src/domain/overclock.ts` onto the port; delete `multiblocks.ts`             |
-| 8     | `GraphIssue` kinds and the issue panel                                            |
-| 9     | Node UI — machine parameters, recipe heat, rewritten `Calculations`               |
+| Stage | What                                                                |
+| ----- | ------------------------------------------------------------------- |
+| 8     | `GraphIssue` kinds and the issue panel                              |
+| 9     | Node UI — machine parameters, recipe heat, rewritten `Calculations` |
 
 The full plan, including the design rationale for each stage, is at
 `~/.claude/plans/continuing-with-the-multilocks-declarative-turtle.md`. Read its
 stage 6 against the decision below, which supersedes part of it.
 
-### Stage 6 is started and stashed
+## Stages 6 and 7 — what landed
 
-`git stash list` holds one entry:
+They went in one commit, for the reason the previous handoff gave: stage 6
+cannot be green alone. Once `normalizeNodes` strips `parallels`, the old
+heuristic reads `undefined` and runs every multiblock at one parallel, and
+`recipeNode.tsx` patches fields `RecipeFields` no longer carries.
 
-```
-stage 6 WIP: EnergyHatch.amps + config/recipeHeat/parallelLimit + migration
-```
-
-It touches only `productionStore/{types,helpers}.ts` (~76 lines) and **does not
-typecheck on its own** — that is the finding, not a defect in it. `git stash pop`
-to pick it up. What it already does:
+### The store
 
 - `EnergyHatch` gains a required `amps: number`, with `DEFAULT_HATCH_AMPS = 2`
-  exported next to it. Required rather than optional because `normalizeNodes`
-  backfills it, so nothing downstream should have to ask twice.
-- `MultiblockRecipeData` gains `config?`, `recipeHeat?` and `parallelLimit?`,
-  with `overclock?`/`parallels?` left in place and marked `@deprecated`.
-- `RecipeFields` swaps `overclock`/`parallels` for the three new fields.
-- `PersistedRecipe` keeps `overclock?`/`parallels?` as v1 read-only forever, and
-  takes `hatches` with `amps` optional — a saved hatch has none, and filling it
-  in is what the backfill is for.
+  beside it. Required rather than optional because `normalizeNodes` backfills
+  it, so nothing downstream has to ask twice.
+- `MultiblockRecipeData` gains `config?`, `recipeHeat?` and `parallelLimit?`;
+  `overclock?` and `parallels?` are gone from the type entirely, since the
+  engine that read them is gone.
+- `PersistedRecipe` keeps `overclock?`/`parallels?` as v1 read-only forever — a
+  Yjs snapshot from last year still arrives tomorrow — and takes `hatches` with
+  `amps` optional.
 - `needsBackfill` additionally fires when any hatch lacks `amps`, or when
   `overclock`/`parallels` are present. `normalizeNodes` fills the amps, drops
-  those two fields, and spreads the three new optional ones **conditionally** —
-  writing `config: undefined` puts an explicit undefined key in the object,
-  which survives `JSON.stringify` inconsistently across the `historyKey`,
+  those two, and spreads the three new optional ones **conditionally**: writing
+  `config: undefined` puts an explicit undefined key in the object, which
+  survives `JSON.stringify` inconsistently across the `historyKey`,
   `isDeepEqual` and Yjs paths and shows up as spurious history entries.
+- No `v` schema stamp and no `parallelLimit: parallels ?? 1` backfill, per
+  decision 7.
+- `updateRecipe` drops `config`/`recipeHeat`/`parallelLimit` when a node is
+  switched to a singleblock, the way it already dropped `hatches`.
 
-There is no `v` schema stamp, per decision 7.
+### The engine
 
-### Why 6 and 7 have to land together
+`src/domain/overclock.ts` is now a facade, and everything it does is about
+choosing which numbers to hand `src/domain/gt/`:
 
-Stage 6 cannot be green alone, and the plan's "additive" label is wrong about
-this. Once `normalizeNodes` strips `parallels`, the old heuristic in
-`src/domain/overclock.ts` reads `undefined` and silently runs every multiblock
-at one parallel. And `recipeNode.tsx` patches `data.parallels` and
-`data.overclock` through `RecipeFields`, which no longer carries them, so the
-build breaks in the UI as well.
+- `hatchSupply()` is the correction that mattered most. GT keeps **three**
+  numbers where this app kept one: `getAverageInputVoltage` (Σ voltage / hatch
+  count, floored), `getMaxInputAmps` (Σ amps, collapsed to 1 under
+  `useSingleAmp`), and `getMaxInputVoltage` (the Σ, which is what the
+  `N x tier` parallel formulas read and is a different quantity). One LV hatch
+  is 32 EU/t, two are 128, four are 256; the old model said 32, 64 and 128.
+  `useSingleAmp`'s exotic-hatch test reads as "any group carrying more than
+  2 A", because a laser or wireless hatch is exactly the thing that does.
+- The order is GT's: resolve the machine, take the sub-tick multiplier off a
+  **one-parallel** calculator, let `determineParallel` decide how many recipes
+  run, then `calculateOverclock` with that count.
+- `amperageOC` is forced true for every multiblock (`setProcessingLogicPower`
+  sets it unconditionally) and stays false for every single block, which never
+  touches `ParallelHelper` or the catalog at all — decision 8.
+- The facade gates the one thing the kernel deliberately does not: below the
+  recipe's heat the divisions go negative and the power goes _up_, so
+  `machine.requiresHeat && machineHeat < recipeHeat` returns the figures as
+  entered with `underheated: true`.
+- `parallel.running` is the kernel's own answer and is **0** when the supply
+  cannot pay for one recipe. The top-level `parallels` alias floors it at 1, so
+  an underpowered node raises its issue instead of silently emptying every line
+  below it.
+- `oc.floored` is new, and is not something the kernel reports: overclocks GT
+  charged 4x for whose time saving the one-tick floor swallowed. On a
+  multiblock they come back as parallels (`parallel.subTick`); on a single
+  block they are pure waste, which is what the `throttled` issue now means
+  there.
+- Memoised in a `WeakMap<RecipeNodeData, Overclock>`, which `normalizeNodes`'
+  identity return makes safe.
 
-So: pop the stash, then do stage 7 in the same commit. Making `amps` required
-also breaks every hatch literal in the tests — `productionStore.test.ts` around
-lines 1423-1624 and `overclock.test.ts` throughout — which is mechanical, and
-`overclock.test.ts` is being rewritten anyway.
+### The UI
 
-### Stage 7's blast radius, already surveyed
+Stage 7 only kept `recipeNode.tsx` honest — the real node work is stage 9. The
+machine `Select` reads `MACHINE_OPTIONS`/`matchesMachine` from the catalog, the
+parallels `NumberInput` became a `parallelLimit` ceiling whose placeholder is
+the machine's own cap, the overclock-mode `Select` is gone, and `Calculations`
+was restated against the new result shape. There is still no UI for `config` or
+`recipeHeat`, so an EBF runs on its default coil and a 0 K recipe until stage 9.
 
-Only four files import the engine or the old catalog:
+### Issues
 
-| File                                         | What it needs                                                                                                                                                                                |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `contexts/productionStore/helpers.ts`        | `overclock()` at four call sites: `recipeScale` (`.parallels`), `overclockIssues`, `recipePower` (`.power`), `recipeTime` (`.time`). Also imports `findMultiblock` for the `unmodeled` issue |
-| `components/production/nodes/recipeNode.tsx` | the parallels `NumberInput` (~line 260), the overclock-mode `Select` (~282), `HatchField`'s two `{ tier: 'LV', count: 1 }` literals (~528, ~603), and `Calculations`                         |
-| `contexts/productionStore.test.ts`           | imports `overclock` directly; hatch literals                                                                                                                                                 |
-| `domain/overclock.test.ts`                   | rewritten wholesale                                                                                                                                                                          |
+`overclockIssues` keeps the same four kinds the panel already renders, restated
+against the port: `underpowered`, `overparallel` (now "the hatches cannot pay
+for the parallels the machine offers"), `throttled` (`oc.wasted` plus
+`oc.floored` where no sub-tick multiplier absorbed it), and `unmodeled` (not in
+the catalog, `unknown` confidence, or an unread parallel model). Stage 8 turns
+these into their own kinds with the kernel's reasons attached.
 
-`src/domain/multiblocks.ts` (241 lines) is then unreferenced and gets deleted.
+### Pinned results, all hand-worked against the Java before being written down
 
-Keep the result-object shape the plan specifies — `oc.{total, regular, heat,
-laser, available, wasted, clampedBy}`, `parallel.{running, machineCap, powerCap,
-subTick, nodeLimit, limitedBy}` and the rest — because stages 8 and 9 are
-written against it. Keep `parallels` as an alias for `parallel.running` so
-`recipeScale` does not move. Memoise the facade in a
-`WeakMap<RecipeNodeData, Overclock>`: it now does a catalog lookup and a config
-resolve, and `normalizeNodes`' identity return is what makes the cache safe.
+- 4 LV hatches deliver **256 EU/t**, not 128
+- a 32 EU/t, 20-tick recipe on one UV hatch: sub-tick multiplier **7**, so a
+  cap-1 machine runs 7 recipes, then re-overclocks against the 224 EU/t that
+  costs and lands on 229,376 EU/t in 1 tick
+- Volcanus at 8 parallels takes **no overclock at all** — 8,192 / 3,119 is 2 by
+  integer division and `log4(2)` is 0 — and charges 3,120 EU/t over 45 ticks
+- an EBF on HSS-G coils and one IV hatch is 5,401 + 100 x (5 - 2) = **5,701 K**,
+  which against an 1,800 K recipe is four 0.95 discounts and two heat
+  overclocks, ending at 6,256 EU/t and 18 ticks
+- an Industrial Centrifuge on 4 EV hatches reads the **summed** 8,192 (IV,
+  tier 5) for its `6 x tier` and caps at 30
+- the same UV recipe that wastes an overclock in a Macerator runs 4 parallels
+  in a multiblock — the single biggest behavioural change in the port
 
-The kernel's entry points are `calculateOverclock(OverclockInput)` and
-`determineParallel(ParallelInput)` in `src/domain/gt/`, plus
-`calculateMultiplierUnderOneTick` for the sub-tick multiplier that
-`ParallelHelper` applies before every other clamp. `resolveMachine(machine,
-config, context)` in `src/domain/machines/catalog.ts` turns a node's config into
-the flat numbers both of them take.
+### Not verified in game yet
+
+The list under "Verify against the game" below is unchanged and still the
+highest-value next thing. Nothing here has been checked against a running pack.
 
 ## Commands
 

@@ -128,15 +128,18 @@ describe('finding a machine by whatever a graph saved', () => {
     expect(findMachine('Definitely Not A Machine')).toBeUndefined();
   });
 
-  // RATCHET. Every one of these strings is persisted inside saved Yjs graphs,
-  // so all 145 must resolve before multiblocks.ts can be deleted. The number
-  // only ever goes up: the extractor fills the catalog, and anything whose name
+  // RATCHET. Every one of these strings is persisted inside saved Yjs graphs.
+  // Per decision 7 they are reported, not gated: the 14 that do not resolve are
+  // machines from mods outside GT5-Unofficial (Ender Quarry, Stargate, Draconic
+  // Reactor, Forestry Multifarm) or ones it no longer ships, and aliasing them
+  // to a plausible-looking neighbour would be a guess. The number only ever
+  // goes up: the extractor fills the catalog, and anything whose name merely
   // moved gets an entry in aliases.json
   it('resolves at least as many legacy names as it did last time', () => {
     const resolved = legacyNames.names.filter(
       name => findMachine(name) !== undefined,
     ).length;
-    expect(resolved).toBeGreaterThanOrEqual(2);
+    expect(resolved).toBeGreaterThanOrEqual(131);
     expect(legacyNames.names).toHaveLength(145);
   });
 });

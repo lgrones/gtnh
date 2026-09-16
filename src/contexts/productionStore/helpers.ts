@@ -6,11 +6,12 @@ import { type Connection, type Edge } from '@xyflow/react';
 // only elkjs reference the dynamic import() in getElk below.
 type ElkNode = import('elkjs/lib/elk.bundled.js').ElkNode;
 
-import { findMultiblock } from '@/domain/multiblocks';
-import { hatchPower, overclock } from '@/domain/overclock';
+import type { MachineConfig } from '@/domain/machines/types';
+import { hatchVoltage, overclock } from '@/domain/overclock';
 import { TICKS_PER_SECOND, TIER_EU } from '@/domain/tiers';
 
 import {
+  DEFAULT_HATCH_AMPS,
   DRAG_HANDLE_CLASS,
   type ProductionNode,
   type ProductionNodeType,
@@ -126,7 +127,14 @@ interface PersistedRecipe {
   kind?: RecipeKind;
   voltage?: VoltageTier;
   amperage?: number;
-  hatches?: EnergyHatch[];
+  // `amps` is optional here and required on EnergyHatch: a hatch saved before
+  // it existed has none, and filling it in is what the backfill is for
+  hatches?: (Omit<EnergyHatch, 'amps'> & { amps?: number })[];
+  config?: MachineConfig;
+  recipeHeat?: number;
+  parallelLimit?: number;
+  // v1, read-only forever. a Yjs snapshot from last year still arrives
+  // tomorrow, and it will still carry these two
   overclock?: 'imperfect' | 'perfect';
   parallels?: number;
 }
@@ -142,7 +150,14 @@ const needsBackfill = (data: PersistedRecipe): boolean =>
   data.time === undefined ||
   data.amperage === undefined ||
   (data.kind === 'multi'
-    ? data.hatches === undefined || data.voltage !== undefined
+    ? data.hatches === undefined ||
+      data.voltage !== undefined ||
+      // every hatch needs its amperage, and the two v1 fields have to go —
+      // they are what the old heuristic read, and the machine catalog now
+      // declares both the overclock ratio and the parallel cap
+      data.hatches.some(hatch => hatch.amps === undefined) ||
+      data.overclock !== undefined ||
+      data.parallels !== undefined
     : data.voltage === undefined || data.hatches !== undefined);
 
 export const normalizeNodes = (nodes: ProductionNode[]): ProductionNode[] =>
@@ -171,11 +186,27 @@ export const normalizeNodes = (nodes: ProductionNode[]): ProductionNode[] =>
               kind: 'multi' as const,
               // a multiblock saved before hatches existed described its supply
               // as a tier plus an amp count, which is one hatch group
-              hatches: data.hatches ?? [
-                { tier: data.voltage ?? 'LV', count: 1 },
-              ],
-              overclock: data.overclock,
-              parallels: data.parallels,
+              hatches: (
+                data.hatches ?? [{ tier: data.voltage ?? 'LV', count: 1 }]
+              ).map(hatch => ({
+                ...hatch,
+                amps: hatch.amps ?? DEFAULT_HATCH_AMPS,
+              })),
+              // `overclock` and `parallels` are deliberately not carried over.
+              // the catalog declares the overclock ratio, and the real machine
+              // cap replaces a number someone typed in — see decision 7 in
+              // MULTIBLOCK_PORT.md. spread conditionally, because writing
+              // `config: undefined` puts an explicit undefined key in the
+              // object, which survives JSON.stringify inconsistently across the
+              // historyKey, isDeepEqual and Yjs paths and shows up as spurious
+              // history entries
+              ...(data.config === undefined ? {} : { config: data.config }),
+              ...(data.recipeHeat === undefined
+                ? {}
+                : { recipeHeat: data.recipeHeat }),
+              ...(data.parallelLimit === undefined
+                ? {}
+                : { parallelLimit: data.parallelLimit }),
             }
           : {
               ...shared,
@@ -502,8 +533,9 @@ const REQUIRED_RECIPE_FIELDS: {
   { label: 'duration', missing: data => data.time <= 0 },
 ];
 
-// overclock problems on a multiblock node. singleblocks never overclock, so they
-// produce nothing here
+// overclock and parallel problems on a recipe node. Stage 8 of the port turns
+// these into their own kinds with the kernel's reasons attached; for now they
+// are the same four the panel already renders, restated against the port
 const overclockIssues = (data: RecipeNodeData): GraphIssue[] => {
   const recipe = data.name.trim() === '' ? 'Unnamed recipe' : data.name;
   const result = overclock(data);
@@ -512,42 +544,48 @@ const overclockIssues = (data: RecipeNodeData): GraphIssue[] => {
   if (result.underpowered)
     issues.push({
       recipe,
-      item: `${result.supplied} supplied, ${result.recipe} required`,
+      item: `${result.supply} supplied, ${result.demand} required`,
       kind: 'underpowered',
     });
 
-  // more parallels entered than the hatches can power. the metrics silently
-  // run the affordable count, so without this the typo leaves no trace. an
-  // underpowered node reports that instead, and a machine whose overclock is
-  // not modelled never runs parallels at all
+  // the machine would run more recipes at once than its hatches can pay for.
+  // the metrics silently run the affordable count, so without this the missing
+  // throughput leaves no trace
   if (
     !result.underpowered &&
-    result.power > 0 &&
-    result.mode !== 'none' &&
-    result.mode !== 'unique' &&
-    result.parallels < result.offeredParallels
+    result.parallel.limitedBy === 'power' &&
+    result.parallel.running < result.parallel.effectiveCap
   )
     issues.push({
       recipe,
       item: 'parallels',
       kind: 'overparallel',
-      supply: result.parallels,
-      demand: result.offeredParallels,
+      supply: result.parallel.running,
+      demand: result.parallel.effectiveCap,
     });
 
-  // steps the machine had the power for but nothing to spend them on: the
-  // recipe is at the 1 tick floor and the parallels entered on the node are
-  // already running, so the extra tier buys nothing
-  if (result.surplus > 0)
+  // overclocks that bought nothing. two ways that happens: a cap refused ones
+  // the supply would have paid for, or the one tick floor swallowed the time
+  // ones already charged for would have saved. the second is a singleblock
+  // problem — on a multiblock those come back as parallels, which is exactly
+  // what a sub-tick multiplier above 1 means
+  const spentForNothing =
+    result.oc.wasted + (result.parallel.subTick > 1 ? 0 : result.oc.floored);
+
+  if (spentForNothing > 0)
     issues.push({
       recipe,
-      item: `${result.surplus} overclock${result.surplus > 1 ? 's' : ''}`,
+      item: `${spentForNothing} overclock${spentForNothing > 1 ? 's' : ''}`,
       kind: 'throttled',
     });
 
+  // a name the catalog never heard of, or one whose parallel model the
+  // extractor could not read. either way the numbers are a guess
   if (
     data.kind === 'multi' &&
-    (result.mode === 'unique' || findMultiblock(data.machine) === undefined)
+    (!result.machine.known ||
+      !result.machine.modeled ||
+      !result.machine.parallelKnown)
   )
     issues.push({
       recipe,
@@ -775,7 +813,7 @@ export const demandByTier = (
 
     // a multiblock draws through its hatches, so each tier carries the share of
     // the load its own hatches can deliver
-    const total = hatchPower(node.data.hatches);
+    const total = hatchVoltage(node.data.hatches);
     for (const hatch of node.data.hatches)
       add(
         hatch.tier,

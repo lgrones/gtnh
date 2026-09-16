@@ -16,6 +16,7 @@ export type {
   EnergyHatch,
   GeneratorSelection,
   InputNodeData,
+  MachineConfig,
   MultiblockRecipeData,
   OutputNodeData,
   ProductionNode,
@@ -30,7 +31,7 @@ export type {
   VoltageTier,
   Waypoint,
 } from './types';
-export { DRAG_HANDLE_CLASS, VOLTAGE_TIERS } from './types';
+export { DEFAULT_HATCH_AMPS, DRAG_HANDLE_CLASS, VOLTAGE_TIERS } from './types';
 export {
   layoutNodes,
   machineAmps,
