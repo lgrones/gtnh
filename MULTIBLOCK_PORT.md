@@ -112,7 +112,7 @@ graph holds — 244 subclasses, 214 of them concrete.
 | 3     | `src/domain/machines/{types,expr}.ts`, `src/data/{coils,gtConfig}.json`                                                | `0b36989` |
 | 4     | `src/domain/machines/{merge,catalog,customFormulas}.ts`, `src/data/gt/*`, `src/data/machines.json`                     | `dfa133f` |
 | 5     | `src/tools/gtSource/*.ts` + `src/tools/extractMachines.test.ts`; `src/data/gt/{raw.machines,aliases}.json` regenerated | `80089a7` |
-| 6 + 7 | store types and migration; `src/domain/overclock.ts` swapped onto the port and `multiblocks.ts` deleted                | pending   |
+| 6 + 7 | store types and migration; `src/domain/overclock.ts` swapped onto the port and `multiblocks.ts` deleted                | `3c7bc19` |
 
 332 tests pass, and `pnpm validate` and `pnpm build` are both clean. **The app
 now runs on the port** — stages 6 and 7 landed together, for the reason set out
