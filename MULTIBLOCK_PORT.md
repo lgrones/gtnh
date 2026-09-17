@@ -116,10 +116,12 @@ graph holds — 244 subclasses, 214 of them concrete.
 | 8     | `GraphIssue` gains `underheated`; the overclock kinds re-aimed at the kernel's answers                                 | `56c3772` |
 | 9     | node UI — machine parameters, recipe heat, rewritten `Calculations`                                                    | `a765c69` |
 
-**All nine stages are in.** 335 tests pass, `pnpm validate` and `pnpm build` are
+**All nine stages are in.** 338 tests pass, `pnpm validate` and `pnpm build` are
 clean, and the app was driven in a browser against the Firebase emulators to
-confirm the node renders (see "Checked in the app", below). What remains is
-checking the numbers against a running pack.
+confirm the node renders (see "Checked in the app", below). The overclock ladder
+and the EBF heat matrix have since been checked against GregTech's own figures
+(see "Checked against the oracle"); what remains is the parallel and
+hatch-supply half, against a running pack.
 
 Every expected value in the kernel tests was worked through by hand against the
 Java before the code was written. Notable pinned results:
@@ -295,8 +297,9 @@ these into their own kinds with the kernel's reasons attached.
 
 ### Not verified in game yet
 
-The list under "Verify against the game" below is unchanged and still the
-highest-value next thing. Nothing here has been checked against a running pack.
+Two of the five entries under "Verify against the game" below are now settled
+without a pack, against GregTech's own numbers — see "Checked against the
+oracle". What is left is the parallel and hatch-supply half of the port.
 
 ## Stage 8 — what the port reports
 
@@ -447,15 +450,53 @@ AUDIT_DUMP=/path/to/graphs.json pnpm vitest run src/tools/auditGraphs.test.ts
    their path — `machineVoltage = TIER_EU[voltage]`, amperage 1, `amperageOC`
    false — separate and covered by its own tests.
 
-## Verify against the game before trusting any of this
+## Checked against the oracle
 
-In rough order of how likely each is to be wrong:
+[GTNH Factory Flow](https://github.com/jackwrichards/gtnh-factory-flow) (MIT)
+publishes a dataset built by a Forge mod that runs inside a headless GTNH client
+and calls `gregtech.api.util.OverclockCalculator` on every recipe in the live
+registries. Its per-tier figures are GregTech's own answers, which makes them an
+oracle for this port: reading the Java says what the class does, and only this
+says we read it right.
 
-1. a 1-hatch vs 2-hatch LV machine, for the `useSingleAmp` rule and 2 A per hatch
-2. an EBF recipe at two coil tiers, for `0.95^n` and the 1800 K heat overclocks
-3. Volcanus, for 8 parallels with the 0.9 and 1/2.2 modifiers
-4. an Industrial Centrifuge at two hatch tiers, for `6 x tier`
-5. a short recipe on overtiered hatches, for the sub-tick parallel multiplier
+`tools/buildOracleFixture.mjs` samples that dataset into
+`src/domain/gt/__fixtures__/oracleOverclock.json`, and
+[oracleOverclock.test.ts](src/domain/gt/oracleOverclock.test.ts) replays it.
+Every row agrees:
+
+- **1,792 rows of the plain ladder** — 150 distinct (EU/t, duration) shapes
+  across every tier from ULV to UXV, four decades of EU/t. This covers the
+  integer duration truncation, which is where a transcription usually drifts.
+- **678 rows of the EBF heat matrix** — 6 recipes x 13 tiers x 14 coils. The
+  heat rows go through `resolveMachine`, so the machine data is on trial too,
+  and that is how the run found `MTEElectricBlastFurnace`'s heat is
+  `coilHeat + 100 x (tier - 2)` rather than the coil's own figure. The
+  extractor already had it; the first draft of the test did not, and was wrong
+  by exactly one coil step everywhere.
+
+Two things the oracle cannot settle. Every variant in it runs at **one
+parallel**, so nothing below about parallels is touched by it. And its **MAX**
+column is computed against roughly 2^63 rather than `GTValues.V[14]`
+(`Integer.MAX_VALUE - 7`), so the fixture drops that tier — the same reading
+that corrected `TIER_EU.MAX` here from 2^31.
+
+## Verify against the game before trusting the rest
+
+Settled without a pack, and struck from this list:
+
+- ~~an EBF recipe at two coil tiers, for `0.95^n` and the 1800 K heat
+  overclocks~~ — 678 oracle rows, every coil and every tier.
+- ~~a short recipe on overtiered hatches~~, for the **regular** overclock ladder.
+  The sub-tick parallel multiplier is a parallel mechanic and stays below.
+
+What is left, in rough order of how likely each is to be wrong:
+
+1. a 1-hatch vs 2-hatch LV machine, for the `useSingleAmp` rule and 2 A per
+   hatch. Factory Flow's `energy-hatches.ts` reads the same GT call sites the
+   same way, which is corroboration from a second reader, not a measurement.
+2. Volcanus, for 8 parallels with the 0.9 and 1/2.2 modifiers
+3. an Industrial Centrifuge at two hatch tiers, for `6 x tier`
+4. a short recipe on overtiered hatches, for the sub-tick parallel multiplier
 
 NEI gives the recipe's EU/t and duration; the machine's own GUI gives actual EU/t
 and progress time.

@@ -54,7 +54,13 @@ and void protection.
 
 ## Verify the ported numbers against a running pack
 
-Nothing in the port has been checked in game. `MULTIBLOCK_PORT.md` ends with the
-list, in rough order of how likely each is to be wrong — the supply model
-(2 A per hatch, 1 A when there is exactly one) is first, because it changes the
-power figure on every saved multiblock.
+The overclock ladder and the EBF heat matrix are done, without a pack: GTNH
+Factory Flow publishes a dataset whose per-tier figures come from
+`gregtech.api.util.OverclockCalculator` running inside a headless GTNH client,
+and `src/domain/gt/oracleOverclock.test.ts` replays 2,470 rows of it against the
+port. All agree. See "Checked against the oracle" in `MULTIBLOCK_PORT.md`.
+
+What that dataset cannot answer is anything about parallels — every figure in it
+runs at one parallel — so the rest of the list still wants a pack. The supply
+model (2 A per hatch, 1 A when there is exactly one) is first, because it changes
+the power figure on every saved multiblock.
