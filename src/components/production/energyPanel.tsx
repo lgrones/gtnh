@@ -4,6 +4,7 @@ import {
   IconBolt,
   IconClock,
   IconFlame,
+  IconRotate,
   IconSettingsBolt,
 } from '@tabler/icons-react';
 import { useMemo } from 'react';
@@ -11,6 +12,8 @@ import { useMemo } from 'react';
 import {
   demandByTier,
   lineEnergy,
+  meLedger,
+  starvation,
   useProductionStore,
 } from '@/contexts/productionStore';
 import { GENERATORS, planBank } from '@/domain/generators';
@@ -34,10 +37,25 @@ const formatDuration = (totalSeconds: number): string => {
 export const EnergyPanel = () => {
   const nodes = useProductionStore(state => state.nodes);
   const edges = useProductionStore(state => state.edges);
+  const meMode = useProductionStore(state => state.meMode);
 
-  const { demand, time } = useMemo(
-    () => lineEnergy(nodes, edges),
-    [nodes, edges],
+  const { demand, time, looped } = useMemo(
+    () => lineEnergy(nodes, edges, meMode),
+    [nodes, edges, meMode],
+  );
+
+  // how far undersupply holds the line below its nominal speed. Only asked in
+  // ME mode: a wired line is balanced on per-pass amounts, which say nothing
+  // about the rates this is solved from
+  const starved = useMemo(
+    () => (meMode ? starvation(nodes) : undefined),
+    [nodes, meMode],
+  );
+
+  // a loop has no critical path, so its products' rates are the useful number
+  const products = useMemo(
+    () => (meMode && looped ? meLedger(nodes).products : []),
+    [nodes, meMode, looped],
   );
   const byTier = useMemo(() => demandByTier(nodes), [nodes]);
 
@@ -68,11 +86,59 @@ export const EnergyPanel = () => {
         value={`${fmt(demand, 1)} EU/t`}
       />
 
-      <Stat
-        icon={<IconClock size={16} color="var(--mantine-color-blue-filled)" />}
-        label="Process time (critical path)"
-        value={formatDuration(time)}
-      />
+      {looped ? (
+        <Stat
+          icon={
+            <IconRotate size={16} color="var(--mantine-color-blue-filled)" />
+          }
+          label="Throughput (the line loops)"
+        >
+          {products.length === 0 ? (
+            <Text c="dimmed">Nothing leaves the network</Text>
+          ) : (
+            products.map(product => (
+              <Text key={product.name}>
+                {fmt(product.net * (starved?.worst ?? 1), 2)}/s {product.name}
+              </Text>
+            ))
+          )}
+        </Stat>
+      ) : (
+        <Stat
+          icon={
+            <IconClock size={16} color="var(--mantine-color-blue-filled)" />
+          }
+          label="Process time (critical path)"
+          value={formatDuration(time)}
+        />
+      )}
+
+      {starved !== undefined && starved.worst < 1 && (
+        <Stat
+          icon={
+            <IconAlertTriangle
+              size={16}
+              color="var(--mantine-color-yellow-filled)"
+            />
+          }
+          label={looped ? 'Held back by' : 'Worst case'}
+        >
+          {!looped && (
+            <Text>
+              {formatDuration(time / starved.worst)}{' '}
+              <Text span c="dimmed">
+                ({fmt(1 / starved.worst, 2)}×)
+              </Text>
+            </Text>
+          )}
+
+          <Text size="sm" c="dimmed">
+            {starved.limiting === undefined
+              ? 'undersupplied inputs'
+              : `${starved.limiting} — the line runs at ${fmt(starved.worst * 100, 0)}% of nominal`}
+          </Text>
+        </Stat>
+      )}
 
       <Divider label="Generator" />
 

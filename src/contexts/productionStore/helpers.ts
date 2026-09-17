@@ -1049,9 +1049,295 @@ export const recipePower = (data: RecipeNodeData): number =>
 const recipeTime = (data: RecipeNodeData): number =>
   overclock(data).time * data.multiplier;
 
+// who feeds whom, worked out from the items themselves rather than from the
+// edges: a machine producing X comes before every machine drawing X. On a
+// shared network that IS the dependency, and it holds whether or not anyone
+// drew a pipe — which is what lets a line with no wiring at all still have a
+// meaningful order to it.
+const flowSuccessors = (nodes: ProductionNode[]): Map<string, string[]> => {
+  const consumersOf = new Map<string, string[]>();
+
+  for (const node of nodes) {
+    if (node.type !== 'recipeNode') continue;
+
+    for (const input of node.data.inputs) {
+      const key = itemKey(input.name);
+      if (key === '') continue;
+
+      const list = consumersOf.get(key) ?? [];
+      if (!list.includes(node.id)) list.push(node.id);
+      consumersOf.set(key, list);
+    }
+  }
+
+  const successors = new Map<string, string[]>();
+
+  for (const node of nodes) {
+    if (node.type !== 'recipeNode') continue;
+
+    const list: string[] = [];
+
+    for (const output of node.data.outputs)
+      for (const consumer of consumersOf.get(itemKey(output.name)) ?? [])
+        // a machine feeding itself is a legal recipe, not an ordering
+        if (consumer !== node.id && !list.includes(consumer))
+          list.push(consumer);
+
+    successors.set(node.id, list);
+  }
+
+  return successors;
+};
+
+// one cycle in that flow, as the node ids that chain round, or undefined when
+// the line is acyclic. A cycle means there is no finite longest path — follow
+// it and you arrive back where you started — so the caller reports throughput
+// rather than quietly truncating an arbitrary link and printing the remainder
+const findCycle = (successors: Map<string, string[]>): string[] | undefined => {
+  const state = new Map<string, 'open' | 'done'>();
+  const stack: string[] = [];
+
+  const walk = (id: string): string[] | undefined => {
+    const seen = state.get(id);
+    if (seen === 'done') return undefined;
+    if (seen === 'open') return stack.slice(stack.indexOf(id));
+
+    state.set(id, 'open');
+    stack.push(id);
+
+    for (const next of successors.get(id) ?? []) {
+      const cycle = walk(next);
+      if (cycle !== undefined) return cycle;
+    }
+
+    stack.pop();
+    state.set(id, 'done');
+
+    return undefined;
+  };
+
+  for (const id of successors.keys()) {
+    const cycle = walk(id);
+    if (cycle !== undefined) return cycle;
+  }
+
+  return undefined;
+};
+
+export interface LineFlow {
+  // recipe node id -> the recipe nodes it feeds, by item rather than by edge
+  successors: Map<string, string[]>;
+  // node ids of one cycle in that flow, when there is one
+  cycle?: string[];
+}
+
+export const lineFlow = (nodes: ProductionNode[]): LineFlow => {
+  const successors = flowSuccessors(nodes);
+
+  return { successors, cycle: findCycle(successors) };
+};
+
+export interface Starvation {
+  // fraction of its nominal speed each recipe node actually sustains
+  speed: Map<string, number>;
+  // the lowest of those, i.e. how far the line as a whole falls short. 1 when
+  // nothing starves, so the stretch on any duration is 1 / worst
+  worst: number;
+  // display name of the item actually responsible — traced back through the
+  // chain of starved machines to the first shortage nothing else caused
+  limiting?: string;
+}
+
+// how many passes it takes for the throttling to settle. Each pass can only
+// lower a speed, and the lowering shrinks the demand that caused it, so this
+// converges quickly; the cap is here so a pathological graph cannot spin
+const STARVATION_PASSES = 64;
+
+// how far below nominal a machine has to be before it counts as held back
+const STARVATION_EPSILON = 1e-9;
+
+// How fast each machine can actually run once undersupply is taken into
+// account.
+//
+// This has to be SOLVED rather than read off. An undersized producer starves
+// its consumer; the starved consumer then makes less and starves ITS consumer,
+// and around a loop that feeds back into the first machine. So every pass
+// scales each machine by the tightest supply-to-demand ratio among its inputs,
+// and the passes repeat until nothing moves. Scaling a machine down also scales
+// down the demand it places, which is what makes the process settle instead of
+// oscillating.
+//
+// Items nothing in the line makes are treated as unlimited: they are what you
+// supply, and the ledger already lists them. Water and anything held in storage
+// are unlimited for the same reason.
+export const starvation = (nodes: ProductionNode[]): Starvation => {
+  interface Row {
+    key: string;
+    name: string;
+    rate: number;
+  }
+
+  const recipes: { id: string; inputs: Row[]; outputs: Row[] }[] = [];
+  const speed = new Map<string, number>();
+
+  for (const node of nodes) {
+    if (node.type !== 'recipeNode') continue;
+
+    const row = (item: RecipeItem): Row => ({
+      key: itemKey(item.name),
+      name: item.name.trim(),
+      rate: itemRate(node.data, item),
+    });
+
+    recipes.push({
+      id: node.id,
+      inputs: node.data.inputs.filter(i => itemKey(i.name) !== '').map(row),
+      outputs: node.data.outputs.filter(o => itemKey(o.name) !== '').map(row),
+    });
+    speed.set(node.id, 1);
+  }
+
+  // anything the line does not make itself, it is fed — as is water, and
+  // anything a storage node holds
+  const produced = new Set<string>();
+  for (const recipe of recipes)
+    for (const output of recipe.outputs) produced.add(output.key);
+
+  const unlimited = new Set<string>();
+  for (const recipe of recipes)
+    for (const input of recipe.inputs)
+      if (!produced.has(input.key) || FREELY_AVAILABLE.has(input.key))
+        unlimited.add(input.key);
+
+  for (const node of nodes) {
+    if (node.type !== 'storageNode') continue;
+    for (const item of node.data.items) {
+      const key = itemKey(item.name);
+      // a capped storage still tops the line up; treating it as unlimited here
+      // would understate a shortfall, so only an uncapped one counts
+      if (key !== '' && item.rate === undefined) unlimited.add(key);
+    }
+  }
+
+  const binding = new Map<string, string>();
+
+  // which machines make each item, for tracing a shortage back to its source
+  const producersOf = new Map<string, string[]>();
+  for (const recipe of recipes)
+    for (const output of recipe.outputs) {
+      const list = producersOf.get(output.key) ?? [];
+      if (!list.includes(recipe.id)) list.push(recipe.id);
+      producersOf.set(output.key, list);
+    }
+
+  for (let pass = 0; pass < STARVATION_PASSES; pass++) {
+    const supply = new Map<string, number>();
+    const demand = new Map<string, number>();
+
+    for (const recipe of recipes) {
+      const f = speed.get(recipe.id) ?? 1;
+      for (const output of recipe.outputs)
+        supply.set(output.key, (supply.get(output.key) ?? 0) + output.rate * f);
+      for (const input of recipe.inputs)
+        demand.set(input.key, (demand.get(input.key) ?? 0) + input.rate * f);
+    }
+
+    let moved = 0;
+
+    for (const recipe of recipes) {
+      let ratio = 1;
+      let cause: Row | undefined;
+
+      for (const input of recipe.inputs) {
+        if (unlimited.has(input.key)) continue;
+
+        const wanted = demand.get(input.key) ?? 0;
+        if (wanted <= 0) continue;
+
+        const available = supply.get(input.key) ?? 0;
+        const share = available / wanted;
+
+        if (share < ratio) {
+          ratio = share;
+          cause = input;
+        }
+      }
+
+      if (ratio >= 1) continue;
+
+      speed.set(recipe.id, (speed.get(recipe.id) ?? 1) * ratio);
+      if (cause !== undefined) binding.set(recipe.id, cause.name);
+      moved = Math.max(moved, 1 - ratio);
+    }
+
+    if (moved < 1e-9) break;
+  }
+
+  // Each pass multiplies, so a machine that is never actually held back can
+  // still drift a ULP below 1 — and "0.9999999999999998 of nominal" then reads
+  // as a starved machine, which sends the trace below off after a shortage that
+  // does not exist. Snap those back
+  for (const [id, f] of speed) if (f > 1 - STARVATION_EPSILON) speed.set(id, 1);
+
+  let worst = 1;
+  let slowest: string | undefined;
+
+  for (const [id, f] of speed)
+    if (f < worst) {
+      worst = f;
+      slowest = id;
+    }
+
+  // The slowest machine names the item IT is waiting on, but that item may be
+  // short only because its own producer is starved, and so on back. Reporting
+  // the proximate shortage sends you off to fix a machine that is already doing
+  // all it can, so walk back to the first shortage nothing upstream explains —
+  // that is the one more machines will actually cure.
+  const rootCause = (from: string): string | undefined => {
+    const seen = new Set<string>();
+    let at = from;
+
+    for (;;) {
+      // a loop of mutually starved machines has no single culprit to name
+      if (seen.has(at)) return undefined;
+      seen.add(at);
+
+      const item = binding.get(at);
+      if (item === undefined) return undefined;
+
+      let culprit: string | undefined;
+      let slowestUpstream = 1;
+
+      for (const producer of producersOf.get(itemKey(item)) ?? []) {
+        const f = speed.get(producer) ?? 1;
+        if (f < slowestUpstream && f < 1 - STARVATION_EPSILON) {
+          slowestUpstream = f;
+          culprit = producer;
+        }
+      }
+
+      // nothing upstream is itself being held back, so this is the real one
+      if (culprit === undefined) return item;
+
+      at = culprit;
+    }
+  };
+
+  return {
+    speed,
+    worst,
+    limiting: slowest === undefined ? undefined : rootCause(slowest),
+  };
+};
+
 export interface LineEnergy {
   demand: number; // peak power draw (EU/t) — all recipes assumed concurrent
-  time: number; // critical-path duration (seconds) of the whole line
+  time: number; // critical-path duration (seconds); 0 when the line loops
+  // a loop has no finite critical path, so `time` means nothing for one and the
+  // caller should report throughput instead. Only ever set in ME mode, where
+  // the ordering comes from the items and a cycle in it is a real fact about
+  // the line rather than an artefact of how someone dragged the edges
+  looped: boolean;
 }
 
 // peak demand and total runtime for a production line:
@@ -1062,6 +1348,7 @@ export interface LineEnergy {
 export const lineEnergy = (
   nodes: ProductionNode[],
   edges: Edge[],
+  meMode = false,
 ): LineEnergy => {
   let demand = 0;
 
@@ -1072,7 +1359,22 @@ export const lineEnergy = (
     weight.set(node.id, recipeTime(node.data));
   }
 
-  // successor adjacency: an edge source must finish before its target starts
+  // successor adjacency. Wired, an edge source must finish before its target
+  // starts. On an ME network there may be no edges at all, so the order comes
+  // from the items instead — and a cycle there is a genuine loop, which has no
+  // longest path to measure
+  if (meMode) {
+    const { successors, cycle } = lineFlow(nodes);
+
+    if (cycle !== undefined) return { demand, time: 0, looped: true };
+
+    return {
+      demand,
+      time: longestPath(successors, weight, nodes),
+      looped: false,
+    };
+  }
+
   const successors = new Map<string, string[]>();
   for (const edge of edges) {
     let list = successors.get(edge.source);
@@ -1080,8 +1382,20 @@ export const lineEnergy = (
     list.push(edge.target);
   }
 
-  // longest path ending-inclusive at each node, memoized; `visiting` guards
-  // against cycles (a malformed graph) by treating the back-edge as weight 0
+  return {
+    demand,
+    time: longestPath(successors, weight, nodes),
+    looped: false,
+  };
+};
+
+// longest path ending-inclusive at each node, memoized; `visiting` guards
+// against cycles (a malformed graph) by treating the back-edge as weight 0
+const longestPath = (
+  successors: Map<string, string[]>,
+  weight: Map<string, number>,
+  nodes: ProductionNode[],
+): number => {
   const longest = new Map<string, number>();
   const visiting = new Set<string>();
 
@@ -1104,7 +1418,7 @@ export const lineEnergy = (
   let time = 0;
   for (const node of nodes) time = Math.max(time, walk(node.id));
 
-  return { demand, time };
+  return time;
 };
 
 // electric load at a voltage tier: total power draw and peak single-machine
@@ -1248,7 +1562,7 @@ export const lineMetrics = (
       });
   }
 
-  const { time, demand } = lineEnergy(synced, edges);
+  const { time, demand } = lineEnergy(synced, edges, meMode);
 
   return { inputs, outputs, disposals, machines, time, demand };
 };

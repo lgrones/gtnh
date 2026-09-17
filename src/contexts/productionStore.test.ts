@@ -11,8 +11,10 @@ import {
   machineAmps,
   machineTier,
   normalizeNodes,
+  lineFlow,
   lineMetrics,
   meLedger,
+  starvation,
   demandByTier,
   recipePower,
   useProductionStore,
@@ -2087,5 +2089,197 @@ describe('meLedger — storage and freely available items', () => {
     expect(find(ledger.covered, 'Naquadah')).toBeUndefined();
     expect(find(ledger.products, 'Naquadah')).toBeUndefined();
     expect(find(ledger.balanced, 'Naquadah')).toBeUndefined();
+  });
+});
+
+describe('starvation', () => {
+  // every recipe here carries the same power and duration, so a row's rate is
+  // proportional to its quantity and the arithmetic stays readable
+  const recipe = (
+    ins: [string, number][],
+    outs: [string, number][],
+  ): string => {
+    const id = addNode('recipeNode');
+    for (const [name, quantity] of ins) {
+      const item = addInput(id);
+      state().updateRecipeInput(id, item, { name, quantity });
+    }
+    for (const [name, quantity] of outs) {
+      const item = addOutput(id);
+      state().updateRecipeOutput(id, item, { name, quantity });
+    }
+    completeRecipe(id);
+    return id;
+  };
+
+  it('leaves a line that keeps up at full speed', () => {
+    const a = recipe([['Ore', 4]], [['Plate', 4]]);
+    const b = recipe([], [['Ore', 4]]);
+
+    const result = starvation(state().nodes);
+    expect(result.worst).toBe(1);
+    expect(result.limiting).toBeUndefined();
+    expect(result.speed.get(a)).toBe(1);
+    expect(result.speed.get(b)).toBe(1);
+  });
+
+  it('holds a machine to the share of the input it can actually get', () => {
+    const consumer = recipe([['Ore', 4]], [['Plate', 4]]);
+    recipe([], [['Ore', 1]]);
+
+    // a quarter of the ore it wants, so a quarter of the speed
+    const result = starvation(state().nodes);
+    expect(result.speed.get(consumer)).toBeCloseTo(0.25, 9);
+    expect(result.worst).toBeCloseTo(0.25, 9);
+    expect(result.limiting).toBe('Ore');
+  });
+
+  it('carries a shortage downstream to everything behind it', () => {
+    // C makes 2 X; B wants 4 X and makes 4 Y; A wants 8 Y. B is held to half,
+    // which halves the Y it makes, which holds A to a quarter
+    recipe([], [['X', 2]]);
+    const b = recipe([['X', 4]], [['Y', 4]]);
+    const a = recipe([['Y', 8]], [['Done', 1]]);
+
+    const result = starvation(state().nodes);
+    expect(result.speed.get(b)).toBeCloseTo(0.5, 9);
+    expect(result.speed.get(a)).toBeCloseTo(0.25, 9);
+    expect(result.worst).toBeCloseTo(0.25, 9);
+
+    // A is waiting on Y, but B is already flat out making all the Y it can —
+    // the shortage that a machine can actually cure is X, one hop further back
+    expect(result.limiting).toBe('X');
+  });
+
+  it('settles rather than oscillating when the line loops', () => {
+    // A feeds B and B feeds A, the shape a real processing loop has
+    recipe([['Y', 1]], [['X', 1]]);
+    recipe([['X', 4]], [['Y', 4]]);
+
+    const result = starvation(state().nodes);
+    expect(Number.isFinite(result.worst)).toBe(true);
+    expect(result.worst).toBeGreaterThan(0);
+    expect(result.worst).toBeLessThan(1);
+  });
+
+  it('never starves an item nothing in the line makes', () => {
+    const only = recipe([['Naquadah', 9999]], [['Plate', 1]]);
+
+    // it is on the required list, which is where it belongs — it is not a
+    // reason to report the machine as running slowly
+    expect(starvation(state().nodes).speed.get(only)).toBe(1);
+  });
+
+  it('never starves water, or anything held in storage', () => {
+    const consumer = recipe(
+      [
+        ['Water', 9999],
+        ['Ore', 4],
+      ],
+      [['Plate', 1]],
+    );
+    recipe([], [['Ore', 1]]);
+
+    const before = starvation(state().nodes);
+    expect(before.limiting).toBe('Ore');
+
+    const store = addNode('storageNode');
+    state().addStorageItem(store);
+    const item = (
+      state().nodes.find(n => n.id === store)!.data as {
+        items: { id: string }[];
+      }
+    ).items[0]!.id;
+    state().updateStorageItem(store, item, { name: 'Ore' });
+
+    expect(starvation(state().nodes).speed.get(consumer)).toBe(1);
+  });
+});
+
+describe('lineFlow', () => {
+  const recipe = (ins: [string, number][], outs: [string, number][]) => {
+    const id = addNode('recipeNode');
+    for (const [name, quantity] of ins) {
+      const item = addInput(id);
+      state().updateRecipeInput(id, item, { name, quantity });
+    }
+    for (const [name, quantity] of outs) {
+      const item = addOutput(id);
+      state().updateRecipeOutput(id, item, { name, quantity });
+    }
+    completeRecipe(id);
+    return id;
+  };
+
+  it('orders machines by the items they exchange, with no edges drawn', () => {
+    const a = recipe([], [['Ore', 4]]);
+    const b = recipe([['Ore', 4]], [['Plate', 4]]);
+
+    const { successors, cycle } = lineFlow(state().nodes);
+    expect(successors.get(a)).toEqual([b]);
+    expect(successors.get(b)).toEqual([]);
+    expect(cycle).toBeUndefined();
+  });
+
+  it('finds the cycle in a loop', () => {
+    const a = recipe([['Y', 1]], [['X', 1]]);
+    const b = recipe([['X', 1]], [['Y', 1]]);
+
+    expect(lineFlow(state().nodes).cycle?.slice().sort()).toEqual(
+      [a, b].sort(),
+    );
+  });
+
+  it('does not call a machine feeding itself a loop', () => {
+    // a recipe listing the same item in and out is legal, not an ordering
+    recipe(
+      [['Catalyst', 1]],
+      [
+        ['Catalyst', 1],
+        ['Plate', 1],
+      ],
+    );
+    expect(lineFlow(state().nodes).cycle).toBeUndefined();
+  });
+});
+
+describe('lineEnergy — ME mode', () => {
+  const recipe = (ins: [string, number][], outs: [string, number][]) => {
+    const id = addNode('recipeNode');
+    for (const [name, quantity] of ins) {
+      const item = addInput(id);
+      state().updateRecipeInput(id, item, { name, quantity });
+    }
+    for (const [name, quantity] of outs) {
+      const item = addOutput(id);
+      state().updateRecipeOutput(id, item, { name, quantity });
+    }
+    completeRecipe(id);
+    return id;
+  };
+
+  it('times an unwired chain from the items alone', () => {
+    const a = recipe([], [['Ore', 4]]);
+    const b = recipe([['Ore', 4]], [['Plate', 4]]);
+
+    // wired mode sees no edges and so no chain at all; ME mode reads the
+    // ordering off the items and gets the real two-stage duration
+    const nominal =
+      overclock(recipeData(a)).time * recipeData(a).multiplier +
+      overclock(recipeData(b)).time * recipeData(b).multiplier;
+
+    expect(lineEnergy(state().nodes, [], true).time).toBeCloseTo(nominal, 9);
+    expect(lineEnergy(state().nodes, []).time).toBeLessThan(nominal);
+  });
+
+  it('reports a loop instead of inventing a critical path for it', () => {
+    recipe([['Y', 1]], [['X', 1]]);
+    recipe([['X', 1]], [['Y', 1]]);
+
+    const looped = lineEnergy(state().nodes, [], true);
+    expect(looped.looped).toBe(true);
+    expect(looped.time).toBe(0);
+    // the power figure is unaffected — every machine still draws what it draws
+    expect(looped.demand).toBeGreaterThan(0);
   });
 });
