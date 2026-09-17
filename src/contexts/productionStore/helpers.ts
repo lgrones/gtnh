@@ -372,17 +372,14 @@ export const itemRate = (data: RecipeNodeData, item: RecipeItem): number => {
   return time > 0 ? (item.quantity * parallels) / time : 0;
 };
 
-// how much of an item a recipe row accounts for, in one unit or the other
-type AmountOf = (data: RecipeNodeData, item: RecipeItem) => number;
-
 // `${recipeId}:${itemId}` -> recipe item, indexed for both inputs and outputs,
 // plus each recipe's item scale (cycles x parallels) keyed by node id
 interface ItemIndex {
   outputs: Map<string, RecipeItem>;
   inputs: Map<string, RecipeItem>;
   scales: Map<string, number>;
-  // each recipe node's data, so a sum can be taken in any unit an `AmountOf`
-  // knows how to compute rather than only the pre-baked `scales`
+  // each recipe node's data, so a sum can be taken in whatever unit the caller
+  // needs rather than only the pre-baked `scales`
   data: Map<string, RecipeNodeData>;
 }
 
@@ -419,7 +416,6 @@ const recipeItem = (
 const demandByOutput = (
   index: ItemIndex,
   edges: Edge[],
-  amount: AmountOf = itemPerPass,
 ): Map<string, number> => {
   const demand = new Map<string, number>();
 
@@ -432,7 +428,7 @@ const demandByOutput = (
     const data = index.data.get(edge.target);
     if (data === undefined) continue;
     const key = `${edge.source}:${edge.sourceHandle}`;
-    demand.set(key, (demand.get(key) ?? 0) + amount(data, input));
+    demand.set(key, (demand.get(key) ?? 0) + itemPerPass(data, input));
   }
 
   return demand;
@@ -566,10 +562,11 @@ export interface LedgerEntry {
 }
 
 export interface MeLedger {
-  required: LedgerEntry[]; // net < 0 and nothing covers it — real work
-  covered: LedgerEntry[]; // short, but storage or the world already answers it
+  required: LedgerEntry[]; // net < 0 and nothing in the line makes it
+  short: LedgerEntry[]; // net < 0 but the line DOES make it — undersized
+  covered: LedgerEntry[]; // net < 0, and storage or the world already answers it
   products: LedgerEntry[]; // net > 0 — the end products and the byproducts
-  balanced: LedgerEntry[]; // net ~ 0 — made and eaten inside the line
+  balanced: LedgerEntry[]; // net ~ 0 — made and eaten at the same rate
 }
 
 // GTNH hands every base unlimited water — water hatches, reservoirs, rain
@@ -588,36 +585,21 @@ export const itemKey = (name: string): string =>
 // as something you must go and supply
 const NET_EPSILON = 1e-9;
 
-// what the whole line does to the ME network, per item.
+// what the whole line does to the ME network, per item: everything every machine
+// makes against everything every machine draws, in items/second.
 //
-// Edges are not wiring here — they mean "this output goes straight into that
-// machine, bypassing the network". Such an edge moves exactly what the
-// consuming input asks for, uncapped: a producer that cannot keep up simply
-// goes net-negative and the network tops the difference up, which is what
-// actually happens in game, since an input bus does not care where an item came
-// from. The consequence worth knowing is that an item's NET never depends on
-// how the line is wired — a direct edge only moves which machine is credited
-// with it. An item piped entirely direct cancels on both sides and drops out of
-// the ledger, which is the point of drawing one.
-export const meLedger = (nodes: ProductionNode[], edges: Edge[]): MeLedger => {
-  const index = indexRecipeItems(nodes);
-
-  // per producing output handle, what direct pipes carry away from it
-  const pipedRate = demandByOutput(index, edges, itemRate);
-  const pipedPass = demandByOutput(index, edges, itemPerPass);
-
-  // input handles fed by a direct pipe — their whole demand arrived over it, so
-  // they draw nothing from the network
-  const pipedInputs = new Set<string>();
-  for (const edge of edges) {
-    if (!edge.sourceHandle || !edge.targetHandle) continue;
-    if (
-      recipeItem(index, edge.target, edge.targetHandle, 'inputs') === undefined
-    )
-      continue;
-    pipedInputs.add(`${edge.target}:${edge.targetHandle}`);
-  }
-
+// It takes no edges, and that is the point rather than an oversight. On a shared
+// network an input bus does not care where an item came from, so whether two
+// machines happen to be wired to each other cannot change what the line as a
+// whole needs or yields. Drawing a direct pipe is a note about routing, not a
+// change to the arithmetic.
+//
+// Totals are kept GROSS — what is made and what is drawn, side by side — rather
+// than netted off against each other as the flow is traced. A loop's
+// intermediate is made and consumed by the same line, and netting the two into
+// one number loses which half is the problem: a producer that cannot keep up
+// reads as a negative amount produced, which is nonsense to show anyone.
+export const meLedger = (nodes: ProductionNode[]): MeLedger => {
   // stock the base already has. Coverage is deliberately NOT production: a
   // storage node is not a machine, so it must never make an item look like
   // something this line yields. All it decides is whether a shortfall is real
@@ -675,35 +657,24 @@ export const meLedger = (nodes: ProductionNode[], edges: Edge[]): MeLedger => {
       // an unnamed row is a half-typed recipe, not an item the network holds
       if (itemKey(output.name) === '') continue;
 
-      const key = `${node.id}:${output.id}`;
-      const rate = itemRate(node.data, output) - (pipedRate.get(key) ?? 0);
-      const pass = itemPerPass(node.data, output) - (pipedPass.get(key) ?? 0);
-
-      if (rate === 0 && pass === 0) continue;
-
       const entry = entryFor(output.name);
-      entry.produced += rate;
-      entry.producedPerPass += pass;
+      entry.produced += itemRate(node.data, output);
+      entry.producedPerPass += itemPerPass(node.data, output);
       if (!entry.producers.includes(node.id)) entry.producers.push(node.id);
     }
 
     for (const input of node.data.inputs) {
       if (itemKey(input.name) === '') continue;
-      if (pipedInputs.has(`${node.id}:${input.id}`)) continue;
-
-      const rate = itemRate(node.data, input);
-      const pass = itemPerPass(node.data, input);
-
-      if (rate === 0 && pass === 0) continue;
 
       const entry = entryFor(input.name);
-      entry.consumed += rate;
-      entry.consumedPerPass += pass;
+      entry.consumed += itemRate(node.data, input);
+      entry.consumedPerPass += itemPerPass(node.data, input);
       if (!entry.consumers.includes(node.id)) entry.consumers.push(node.id);
     }
   }
 
   const required: LedgerEntry[] = [];
+  const short: LedgerEntry[] = [];
   const covered: LedgerEntry[] = [];
   const products: LedgerEntry[] = [];
   const balanced: LedgerEntry[] = [];
@@ -727,8 +698,15 @@ export const meLedger = (nodes: ProductionNode[], edges: Edge[]): MeLedger => {
     const cover = free ? Infinity : (storageRate.get(key) ?? 0);
     const shortfall = -entry.net;
 
+    // an item the line makes for itself is never something to go and source. If
+    // it still comes up short, the producer is simply undersized against the
+    // rate its consumers draw at — a different problem with a different fix, and
+    // filing it under "required" is how a loop ends up looking like a shopping
+    // list for its own intermediates
+    const internal = entry.producers.length > 0;
+
     if (cover <= 0) {
-      required.push(entry);
+      (internal ? short : required).push(entry);
       continue;
     }
 
@@ -742,6 +720,11 @@ export const meLedger = (nodes: ProductionNode[], edges: Edge[]): MeLedger => {
 
     if (cover + NET_EPSILON >= shortfall) {
       covered.push(entry);
+      continue;
+    }
+
+    if (internal) {
+      short.push(entry);
       continue;
     }
 
@@ -764,13 +747,14 @@ export const meLedger = (nodes: ProductionNode[], edges: Edge[]): MeLedger => {
     a.name.localeCompare(b.name);
 
   required.sort(byNet);
+  short.sort(byNet);
   products.sort(byNet);
   // covered and balanced are reference lists rather than to-do lists, so they
   // read alphabetically
   covered.sort(byName);
   balanced.sort(byName);
 
-  return { required, covered, products, balanced };
+  return { required, short, covered, products, balanced };
 };
 
 // Levenshtein distance between two item keys. Item names are short, so the
@@ -1035,7 +1019,7 @@ export const validateGraph = (
   // only when the split actually happened: a near-identical pair that both
   // balance is two genuinely different items, and saying so would be noise.
   if (meMode) {
-    const ledger = meLedger(nodes, edges);
+    const ledger = meLedger(nodes);
 
     for (const short of ledger.required)
       for (const spare of ledger.products)
@@ -1249,7 +1233,7 @@ export const lineMetrics = (
   // are the two ends of the network ledger. reported per pass, which is the
   // unit a wired alternative uses, so the two can be read side by side
   if (meMode) {
-    const ledger = meLedger(nodes, edges);
+    const ledger = meLedger(nodes);
 
     for (const entry of ledger.required)
       inputs.push({

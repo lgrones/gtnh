@@ -14,6 +14,7 @@ import {
   IconCircleCheck,
   IconCircleDashedCheck,
   IconSettings,
+  IconTrendingDown,
 } from '@tabler/icons-react';
 import { useReactFlow } from '@xyflow/react';
 import { useMemo } from 'react';
@@ -35,12 +36,11 @@ import { Items } from './statsPanel';
 // of the wired panel, which count leaf nodes ME mode does not use.
 export const MeLedgerPanel = () => {
   const nodes = useProductionStore(state => state.nodes);
-  const edges = useProductionStore(state => state.edges);
 
   const setNodes = useProductionStore(state => state.setNodes);
   const { fitView } = useReactFlow();
 
-  const ledger = useMemo(() => meLedger(nodes, edges), [nodes, edges]);
+  const ledger = useMemo(() => meLedger(nodes), [nodes]);
 
   // a ledger row names machines, so clicking it should take you to them: select
   // every producer and consumer of that item and frame them. This is what the
@@ -113,8 +113,40 @@ export const MeLedgerPanel = () => {
           amount={entry => entry.net}
           perPass={entry => entry.producedPerPass - entry.consumedPerPass}
           empty="Nothing leaves the network"
+          // an item the line also eats is only a product by the margin, so say
+          // so — otherwise an intermediate piling up looks like a deliverable
+          note={entry =>
+            entry.consumers.length === 0
+              ? undefined
+              : `${formatRate(entry.produced)}/s made, ${formatRate(entry.consumed)}/s used here`
+          }
         />
       </Stat>
+
+      {ledger.short.length > 0 && (
+        <Stat
+          label="Not keeping up"
+          icon={
+            <IconTrendingDown
+              size={16}
+              color="var(--mantine-color-yellow-filled)"
+            />
+          }
+        >
+          <Entries
+            onLocate={locate}
+            entries={ledger.short}
+            amount={entry => -entry.net}
+            perPass={entry => entry.consumedPerPass - entry.producedPerPass}
+            empty=""
+            // both halves, because the fix is more machines on the producing
+            // side — not going out and finding the item somewhere
+            note={entry =>
+              `${formatRate(entry.produced)}/s made, ${formatRate(entry.consumed)}/s drawn`
+            }
+          />
+        </Stat>
+      )}
 
       {ledger.covered.length > 0 && (
         <Stat

@@ -18,7 +18,6 @@ import {
   useProductionStore,
   validateGraph,
   type LedgerEntry,
-  type MeLedger,
   type RecipeNodeData,
   type SinkNodeData,
   type ProductionNode,
@@ -1748,16 +1747,9 @@ describe('meLedger', () => {
 
   const names = (entries: LedgerEntry[]) => entries.map(entry => entry.name);
 
-  const nets = (ledger: MeLedger) =>
-    Object.fromEntries(
-      [...ledger.required, ...ledger.products, ...ledger.balanced].map(
-        entry => [entry.name, entry.net],
-      ),
-    );
-
   it('nets an intermediate out with nothing wired at all', () => {
     chain();
-    const ledger = meLedger(state().nodes, state().edges);
+    const ledger = meLedger(state().nodes);
 
     // the whole point: only Sulfur Dust has to be put into the network, and Ore —
     // which the line makes for itself — is not mistaken for something you buy
@@ -1766,9 +1758,9 @@ describe('meLedger', () => {
     expect(names(ledger.balanced)).toEqual(['Ore']);
   });
 
-  it('leaves every net unchanged when an item is piped direct instead', () => {
+  it('is unchanged by wiring an item up as a direct pipe', () => {
     const { a, b, ore, oreIn } = chain();
-    const before = meLedger(state().nodes, state().edges);
+    const before = meLedger(state().nodes);
 
     state().onConnect({
       source: a,
@@ -1777,34 +1769,29 @@ describe('meLedger', () => {
       targetHandle: oreIn,
     });
 
-    const after = meLedger(state().nodes, state().edges);
-
-    // a direct pipe only moves which machine is credited, never the totals —
-    // so the ledger is the same bar Ore, which now bypasses the network
-    // entirely and drops out of it
-    expect(before).not.toEqual(after);
-    expect(nets(before)).toEqual({ ...nets(after), Ore: 0 });
-    expect(names(after.balanced)).toEqual([]);
+    // an input bus does not care where an item came from, so drawing a pipe
+    // between two machines is a note about routing and nothing more. The ledger
+    // never sees the edges, which is what makes this structural
+    expect(meLedger(state().nodes)).toEqual(before);
   });
 
-  it('shows the network topping up a pipe the producer cannot fill', () => {
-    const { a, b, ore, oreIn } = chain();
+  it('calls an item the line makes too slowly undersized, not missing', () => {
+    const { a, ore } = chain();
     state().updateRecipeOutput(a, ore, { quantity: 5 });
-    state().onConnect({
-      source: a,
-      target: b,
-      sourceHandle: ore,
-      targetHandle: oreIn,
-    });
 
-    const shortfall = meLedger(state().nodes, state().edges).required.find(
-      entry => entry.name === 'Ore',
-    );
+    const ledger = meLedger(state().nodes);
 
-    // 5 made against 8 asked for. an input bus does not care where an item came
-    // from, so the 3 the pipe cannot carry are drawn from the network — a thing
-    // to go and supply, not a broken link
-    expect(shortfall?.net).toBeLessThan(0);
+    // 5 made against 8 drawn. The line DOES make Ore, so this is a producer
+    // that cannot keep up — telling someone to go and source their own
+    // intermediate is how a loop reads as a shopping list for itself
+    expect(names(ledger.required)).not.toContain('Ore');
+    const undersized = ledger.short.find(entry => entry.name === 'Ore');
+    expect(undersized?.net).toBeLessThan(0);
+
+    // and both halves stay legible rather than being netted into one number
+    expect(undersized!.produced).toBeGreaterThan(0);
+    expect(undersized!.consumed).toBeGreaterThan(undersized!.produced);
+
     expect(validateGraph(state().nodes, state().edges, true)).toEqual([]);
   });
 
@@ -1819,7 +1806,7 @@ describe('meLedger', () => {
     state().updateRecipeInput(b, inId, { name: 'iron ore', quantity: 8 });
     completeRecipe(b);
 
-    const ledger = meLedger(state().nodes, state().edges);
+    const ledger = meLedger(state().nodes);
 
     // one item, kept under the first spelling seen
     expect(names(ledger.balanced)).toEqual(['Iron  Ore']);
@@ -1831,8 +1818,9 @@ describe('meLedger', () => {
     addOutput(a);
     completeRecipe(a);
 
-    expect(meLedger(state().nodes, state().edges)).toEqual({
+    expect(meLedger(state().nodes)).toEqual({
       required: [],
+      short: [],
       covered: [],
       products: [],
       balanced: [],
@@ -2018,7 +2006,7 @@ describe('meLedger — storage and freely available items', () => {
 
   it('never counts water as something to go and supply', () => {
     consumer();
-    const ledger = meLedger(state().nodes, state().edges);
+    const ledger = meLedger(state().nodes);
 
     // GTNH water is unlimited, so it is reported but never chased
     expect(find(ledger.required, 'Water')).toBeUndefined();
@@ -2030,7 +2018,7 @@ describe('meLedger — storage and freely available items', () => {
     consumer();
     storage([{ name: 'Sulfur Dust' }]);
 
-    const ledger = meLedger(state().nodes, state().edges);
+    const ledger = meLedger(state().nodes);
     expect(find(ledger.required, 'Sulfur Dust')).toBeUndefined();
     expect(find(ledger.covered, 'Sulfur Dust')?.coveredBy).toBe('storage');
 
@@ -2041,15 +2029,12 @@ describe('meLedger — storage and freely available items', () => {
 
   it('leaves the shortfall beyond a rate cap as real work', () => {
     const a = consumer();
-    const needed = -meLedger(state().nodes, state().edges).required.find(
+    const needed = -meLedger(state().nodes).required.find(
       entry => entry.name === 'Sulfur Dust',
     )!.net;
 
     storage([{ name: 'Sulfur Dust', rate: needed / 4 }]);
-    const entry = find(
-      meLedger(state().nodes, state().edges).required,
-      'Sulfur Dust',
-    );
+    const entry = find(meLedger(state().nodes).required, 'Sulfur Dust');
 
     // a quarter covered, so three quarters still has to come from somewhere
     expect(entry).toBeDefined();
@@ -2066,14 +2051,14 @@ describe('meLedger — storage and freely available items', () => {
 
   it('adds up several storage nodes holding the same item', () => {
     consumer();
-    const needed = -meLedger(state().nodes, state().edges).required.find(
+    const needed = -meLedger(state().nodes).required.find(
       entry => entry.name === 'Sulfur Dust',
     )!.net;
 
     storage([{ name: 'Sulfur Dust', rate: needed / 2 }]);
     storage([{ name: 'Sulfur Dust', rate: needed / 2 }]);
 
-    const ledger = meLedger(state().nodes, state().edges);
+    const ledger = meLedger(state().nodes);
     expect(find(ledger.required, 'Sulfur Dust')).toBeUndefined();
     expect(find(ledger.covered, 'Sulfur Dust')).toBeDefined();
   });
@@ -2082,9 +2067,7 @@ describe('meLedger — storage and freely available items', () => {
     consumer();
     storage([{ name: '  sulfur   dust ' }]);
 
-    expect(
-      find(meLedger(state().nodes, state().edges).covered, 'Sulfur Dust'),
-    ).toBeDefined();
+    expect(find(meLedger(state().nodes).covered, 'Sulfur Dust')).toBeDefined();
   });
 
   it('keeps a covered item out of the metrics a line must be fed', () => {
@@ -2100,7 +2083,7 @@ describe('meLedger — storage and freely available items', () => {
     consumer();
     storage([{ name: 'Naquadah' }]);
 
-    const ledger = meLedger(state().nodes, state().edges);
+    const ledger = meLedger(state().nodes);
     expect(find(ledger.covered, 'Naquadah')).toBeUndefined();
     expect(find(ledger.products, 'Naquadah')).toBeUndefined();
     expect(find(ledger.balanced, 'Naquadah')).toBeUndefined();
