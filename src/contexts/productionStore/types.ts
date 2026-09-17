@@ -19,7 +19,8 @@ export type ProductionNodeType =
   | 'inputNode'
   | 'outputNode'
   | 'recipeNode'
-  | 'disposalNode';
+  | 'disposalNode'
+  | 'storageNode';
 
 // class on the grip element; React Flow's dragHandle selector targets it (needs leading dot)
 export const DRAG_HANDLE_CLASS = 'drag-handle_production';
@@ -65,6 +66,25 @@ export interface RecipeItem {
 // shared by every node — editable display name
 export interface BaseNodeData extends Record<string, unknown> {
   name: string;
+}
+
+// one item a storage node declares as already on hand
+export interface StorageItem {
+  id: string; // crypto.randomUUID()
+  name: string; // editable item name
+  // items/second this storage can cover. ABSENT means unlimited, which is the
+  // common case — the item is sitting in the ME system, or another line already
+  // makes more than enough of it. A number caps the cover, and whatever the line
+  // needs beyond it stays a genuine requirement
+  rate?: number;
+}
+
+// stock the base already has: items and fluids other lines feed into the same ME
+// network. They are not made HERE, so they never count as this line's product —
+// they only stop their consumers being listed as something to go and source.
+// An ME-mode idea; a wired line has input nodes for this instead
+export interface StorageNodeData extends BaseNodeData {
+  items: StorageItem[];
 }
 
 // leaf name + quantity mirror the connected recipe item (input or output)
@@ -164,6 +184,7 @@ export type ProductionNode =
   | Node<InputNodeData, 'inputNode'>
   | Node<OutputNodeData, 'outputNode'>
   | Node<DisposalNodeData, 'disposalNode'>
+  | Node<StorageNodeData, 'storageNode'>
   | Node<RecipeNodeData, 'recipeNode'>;
 
 export interface Clipboard {
@@ -215,6 +236,14 @@ export interface ProductionState {
   generator: GeneratorSelection | null;
   setGenerator: (selection: GeneratorSelection) => void;
 
+  // the line runs on an AE2 ME network: every machine pushes its outputs into
+  // one shared store and pulls its inputs back out of it. adjacency stops
+  // meaning anything, so per-edge balance is replaced by a global ledger (see
+  // `meLedger`) and the leaf nodes that stood in for the outside world go away.
+  // mirrored to the Yjs doc alongside `generator`, so it travels with the graph
+  meMode: boolean;
+  setMeMode: (on: boolean) => void;
+
   // replace the whole graph and wipe undo/redo history
   // reset() => empty (new line), reset(nodes, edges) => load a saved line
   reset: (nodes?: ProductionNode[], edges?: Edge[]) => void;
@@ -238,6 +267,15 @@ export interface ProductionState {
   removeRecipeInput: (nodeId: string, itemId: string) => void;
   removeRecipeOutput: (nodeId: string, itemId: string) => void;
   updateRecipe: (nodeId: string, patch: Partial<RecipeFields>) => void;
+
+  // storage item edits (no-op if node is not a storage node)
+  addStorageItem: (nodeId: string) => void;
+  updateStorageItem: (
+    nodeId: string,
+    itemId: string,
+    patch: Partial<Omit<StorageItem, 'id'>>,
+  ) => void;
+  removeStorageItem: (nodeId: string, itemId: string) => void;
 }
 
 // a slice contributes part of the store; it gets the full store's set/get so

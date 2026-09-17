@@ -15,8 +15,8 @@ import { applyEncoded, createGraphDoc } from './doc';
 // away immediately so it never syncs or leaks.
 export const decodeGraph = (
   snapshot: string | null,
-): { nodes: ProductionNode[]; edges: Edge[] } => {
-  if (!snapshot) return { nodes: [], edges: [] };
+): { nodes: ProductionNode[]; edges: Edge[]; meMode: boolean } => {
+  if (!snapshot) return { nodes: [], edges: [], meMode: false };
 
   const graph = createGraphDoc();
 
@@ -28,6 +28,9 @@ export const decodeGraph = (
       // field just as easily as the active graph can
       nodes: normalizeNodes([...graph.nodes.values()]),
       edges: [...graph.edges.values()],
+      // which balance model the alternative was built under; a snapshot saved
+      // before ME mode existed has no key and reads as a wired line
+      meMode: graph.meta.get('meMode') === true,
     };
   } finally {
     graph.doc.destroy();

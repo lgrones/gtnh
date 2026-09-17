@@ -4,16 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { overclock } from '@/domain/overclock';
 
 import {
+  itemPerPass,
+  itemRate,
   layoutNodes,
   lineEnergy,
   machineAmps,
   machineTier,
   normalizeNodes,
   lineMetrics,
+  meLedger,
   demandByTier,
   recipePower,
   useProductionStore,
   validateGraph,
+  type LedgerEntry,
+  type MeLedger,
   type RecipeNodeData,
   type SinkNodeData,
   type ProductionNode,
@@ -54,7 +59,7 @@ const completeRecipe = (recipe: string) =>
 
 beforeEach(() => {
   vi.useFakeTimers();
-  store.setState({ nodes: [], edges: [], generator: null });
+  store.setState({ nodes: [], edges: [], generator: null, meMode: false });
   vi.runAllTimers();
 });
 
@@ -1681,5 +1686,423 @@ describe('normalizeNodes — persisted graphs', () => {
     });
 
     expect(normalizeNodes([current])[0]).toBe(current);
+  });
+});
+
+describe('itemRate', () => {
+  const soleOutput = (id: string) => recipeData(id).outputs[0]!;
+
+  it('ignores the sequential run count', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 6 });
+    completeRecipe(a);
+
+    const once = itemRate(recipeData(a), soleOutput(a));
+    state().updateRecipe(a, { multiplier: 3 });
+
+    // three cycles in a row move three times as much over three times the
+    // wall-clock, so the rate is untouched — only the per-pass figure moves
+    expect(itemRate(recipeData(a), soleOutput(a))).toBe(once);
+    expect(itemPerPass(recipeData(a), soleOutput(a))).toBe(
+      6 * 3 * overclock(recipeData(a)).parallels,
+    );
+  });
+
+  it('reports no throughput while the duration is unset', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 6 });
+
+    // an unfilled duration is already an `incomplete` issue; the rate must not
+    // come back as Infinity and poison every sum downstream
+    expect(itemRate(recipeData(a), soleOutput(a))).toBe(0);
+  });
+});
+
+describe('meLedger', () => {
+  // A makes Ore; B turns Ore + Sulfur Dust into Plate. Both recipes carry the
+  // same power and duration, so their rates are directly comparable. The second
+  // input is deliberately NOT water — water is freely available, which is its
+  // own case below
+  const chain = () => {
+    const a = addNode('recipeNode');
+    const ore = addOutput(a);
+    state().updateRecipeOutput(a, ore, { name: 'Ore', quantity: 8 });
+    completeRecipe(a);
+
+    const b = addNode('recipeNode');
+    const oreIn = addInput(b);
+    state().updateRecipeInput(b, oreIn, { name: 'Ore', quantity: 8 });
+    const sulfurIn = addInput(b);
+    state().updateRecipeInput(b, sulfurIn, {
+      name: 'Sulfur Dust',
+      quantity: 2,
+    });
+    const plate = addOutput(b);
+    state().updateRecipeOutput(b, plate, { name: 'Plate', quantity: 4 });
+    completeRecipe(b);
+
+    return { a, b, ore, oreIn };
+  };
+
+  const names = (entries: LedgerEntry[]) => entries.map(entry => entry.name);
+
+  const nets = (ledger: MeLedger) =>
+    Object.fromEntries(
+      [...ledger.required, ...ledger.products, ...ledger.balanced].map(
+        entry => [entry.name, entry.net],
+      ),
+    );
+
+  it('nets an intermediate out with nothing wired at all', () => {
+    chain();
+    const ledger = meLedger(state().nodes, state().edges);
+
+    // the whole point: only Sulfur Dust has to be put into the network, and Ore —
+    // which the line makes for itself — is not mistaken for something you buy
+    expect(names(ledger.required)).toEqual(['Sulfur Dust']);
+    expect(names(ledger.products)).toEqual(['Plate']);
+    expect(names(ledger.balanced)).toEqual(['Ore']);
+  });
+
+  it('leaves every net unchanged when an item is piped direct instead', () => {
+    const { a, b, ore, oreIn } = chain();
+    const before = meLedger(state().nodes, state().edges);
+
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: ore,
+      targetHandle: oreIn,
+    });
+
+    const after = meLedger(state().nodes, state().edges);
+
+    // a direct pipe only moves which machine is credited, never the totals —
+    // so the ledger is the same bar Ore, which now bypasses the network
+    // entirely and drops out of it
+    expect(before).not.toEqual(after);
+    expect(nets(before)).toEqual({ ...nets(after), Ore: 0 });
+    expect(names(after.balanced)).toEqual([]);
+  });
+
+  it('shows the network topping up a pipe the producer cannot fill', () => {
+    const { a, b, ore, oreIn } = chain();
+    state().updateRecipeOutput(a, ore, { quantity: 5 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: ore,
+      targetHandle: oreIn,
+    });
+
+    const shortfall = meLedger(state().nodes, state().edges).required.find(
+      entry => entry.name === 'Ore',
+    );
+
+    // 5 made against 8 asked for. an input bus does not care where an item came
+    // from, so the 3 the pipe cannot carry are drawn from the network — a thing
+    // to go and supply, not a broken link
+    expect(shortfall?.net).toBeLessThan(0);
+    expect(validateGraph(state().nodes, state().edges, true)).toEqual([]);
+  });
+
+  it('groups spellings that differ only in case and spacing', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Iron  Ore', quantity: 8 });
+    completeRecipe(a);
+
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'iron ore', quantity: 8 });
+    completeRecipe(b);
+
+    const ledger = meLedger(state().nodes, state().edges);
+
+    // one item, kept under the first spelling seen
+    expect(names(ledger.balanced)).toEqual(['Iron  Ore']);
+    expect(ledger.required).toEqual([]);
+  });
+
+  it('ignores half-typed rows with no item name', () => {
+    const a = addNode('recipeNode');
+    addOutput(a);
+    completeRecipe(a);
+
+    expect(meLedger(state().nodes, state().edges)).toEqual({
+      required: [],
+      covered: [],
+      products: [],
+      balanced: [],
+    });
+  });
+});
+
+describe('validateGraph — ME mode', () => {
+  it('stops reporting unfed inputs and unabsorbed outputs', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 5 });
+    const inId = addInput(a);
+    state().updateRecipeInput(a, inId, { name: 'Dust', quantity: 2 });
+    completeRecipe(a);
+
+    // wired mode calls both of these a problem; on an ME network they are the
+    // normal case, and the ledger answers the balance question instead
+    expect(validateGraph(state().nodes, state().edges)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'surplus' }),
+        expect.objectContaining({ kind: 'unfed' }),
+      ]),
+    );
+    expect(validateGraph(state().nodes, state().edges, true)).toEqual([]);
+  });
+
+  it('still reports missing recipe fields', () => {
+    addNode('recipeNode');
+
+    // recipe DATA problems are orthogonal to how the line is fed
+    expect(validateGraph(state().nodes, state().edges, true)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'incomplete', item: 'energy (EU)' }),
+        expect.objectContaining({ kind: 'incomplete', item: 'duration' }),
+      ]),
+    );
+  });
+
+  it('still reports a direct pipe whose two item names disagree', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 4 });
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 4 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+    state().updateRecipeInput(b, inId, { name: 'Dust' });
+
+    expect(validateGraph(state().nodes, state().edges, true)).toContainEqual(
+      expect.objectContaining({ kind: 'mismatch' }),
+    );
+  });
+});
+
+describe('lineMetrics — ME mode', () => {
+  it('takes its inputs and outputs from the ledger, not the leaves', () => {
+    const a = addNode('recipeNode');
+    const ore = addOutput(a);
+    state().updateRecipeOutput(a, ore, { name: 'Ore', quantity: 8 });
+    const sulfur = addInput(a);
+    state().updateRecipeInput(a, sulfur, { name: 'Sulfur Dust', quantity: 2 });
+    completeRecipe(a);
+
+    // a leaf left over from before the switch must not be counted twice
+    const stray = addNode('outputNode');
+    state().renameNode(stray, 'Stale');
+
+    const wired = lineMetrics(state().nodes, state().edges);
+    const me = lineMetrics(state().nodes, state().edges, true);
+
+    expect(wired.outputs).toContainEqual(
+      expect.objectContaining({ name: 'Stale' }),
+    );
+    expect(me.outputs).toEqual([
+      { name: 'Ore', quantity: 8 * overclock(recipeData(a)).parallels },
+    ]);
+    expect(me.inputs).toEqual([
+      { name: 'Sulfur Dust', quantity: 2 * overclock(recipeData(a)).parallels },
+    ]);
+    expect(me.disposals).toEqual([]);
+
+    // the machine tally and the power figures are model-independent
+    expect(me.machines).toEqual(wired.machines);
+    expect(me.demand).toBe(wired.demand);
+  });
+});
+
+describe('validateGraph — split item names', () => {
+  // A makes "Steel Ingot", B eats "Steel Ingots". One item, two spellings, so
+  // the ledger reports a shortage AND a surplus that both exist only on paper
+  const split = (made: string, eaten: string) => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: made, quantity: 8 });
+    completeRecipe(a);
+
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: eaten, quantity: 8 });
+    completeRecipe(b);
+  };
+
+  it('flags a shortage and a surplus a typo apart', () => {
+    split('Steel Ingot', 'Steel Ingots');
+
+    expect(validateGraph(state().nodes, state().edges, true)).toContainEqual(
+      expect.objectContaining({ kind: 'similar' }),
+    );
+  });
+
+  it('leaves genuinely different items alone', () => {
+    split('Steel Ingot', 'Copper Ingot');
+
+    expect(validateGraph(state().nodes, state().edges, true)).toEqual([]);
+  });
+
+  it('says nothing when the near-identical pair both balance', () => {
+    // both spellings are made AND eaten, so nothing split — two real items
+    const a = addNode('recipeNode');
+    const outA = addOutput(a);
+    state().updateRecipeOutput(a, outA, { name: 'Tin Plate', quantity: 4 });
+    const inA = addInput(a);
+    state().updateRecipeInput(a, inA, { name: 'Tin Plates', quantity: 4 });
+    completeRecipe(a);
+
+    const b = addNode('recipeNode');
+    const outB = addOutput(b);
+    state().updateRecipeOutput(b, outB, { name: 'Tin Plates', quantity: 4 });
+    const inB = addInput(b);
+    state().updateRecipeInput(b, inB, { name: 'Tin Plate', quantity: 4 });
+    completeRecipe(b);
+
+    expect(validateGraph(state().nodes, state().edges, true)).toEqual([]);
+  });
+
+  it('stays quiet in wired mode, where the ledger does not apply', () => {
+    split('Steel Ingot', 'Steel Ingots');
+
+    expect(validateGraph(state().nodes, state().edges)).not.toContainEqual(
+      expect.objectContaining({ kind: 'similar' }),
+    );
+  });
+});
+
+describe('meLedger — storage and freely available items', () => {
+  // one machine turning Sulfur Dust + Water into Plate. Nothing makes either
+  // input, so both start out as work to go and do
+  const consumer = () => {
+    const a = addNode('recipeNode');
+    const sulfur = addInput(a);
+    state().updateRecipeInput(a, sulfur, { name: 'Sulfur Dust', quantity: 4 });
+    const water = addInput(a);
+    state().updateRecipeInput(a, water, { name: 'Water', quantity: 1000 });
+    const plate = addOutput(a);
+    state().updateRecipeOutput(a, plate, { name: 'Plate', quantity: 1 });
+    completeRecipe(a);
+    return a;
+  };
+
+  const storage = (items: { name: string; rate?: number }[]) => {
+    const id = addNode('storageNode');
+    for (const item of items) {
+      state().addStorageItem(id);
+      const stored = (
+        state().nodes.find(n => n.id === id)!.data as {
+          items: { id: string }[];
+        }
+      ).items;
+      const last = stored[stored.length - 1]!.id;
+      state().updateStorageItem(id, last, item);
+    }
+    return id;
+  };
+
+  const find = (entries: LedgerEntry[], name: string) =>
+    entries.find(entry => entry.name === name);
+
+  it('never counts water as something to go and supply', () => {
+    consumer();
+    const ledger = meLedger(state().nodes, state().edges);
+
+    // GTNH water is unlimited, so it is reported but never chased
+    expect(find(ledger.required, 'Water')).toBeUndefined();
+    expect(find(ledger.covered, 'Water')?.coveredBy).toBe('free');
+    expect(find(ledger.required, 'Sulfur Dust')).toBeDefined();
+  });
+
+  it('covers an item declared on hand, with no rate meaning unlimited', () => {
+    consumer();
+    storage([{ name: 'Sulfur Dust' }]);
+
+    const ledger = meLedger(state().nodes, state().edges);
+    expect(find(ledger.required, 'Sulfur Dust')).toBeUndefined();
+    expect(find(ledger.covered, 'Sulfur Dust')?.coveredBy).toBe('storage');
+
+    // storage is not a machine: having it on hand must never make the item look
+    // like something this line produces
+    expect(find(ledger.products, 'Sulfur Dust')).toBeUndefined();
+  });
+
+  it('leaves the shortfall beyond a rate cap as real work', () => {
+    const a = consumer();
+    const needed = -meLedger(state().nodes, state().edges).required.find(
+      entry => entry.name === 'Sulfur Dust',
+    )!.net;
+
+    storage([{ name: 'Sulfur Dust', rate: needed / 4 }]);
+    const entry = find(
+      meLedger(state().nodes, state().edges).required,
+      'Sulfur Dust',
+    );
+
+    // a quarter covered, so three quarters still has to come from somewhere
+    expect(entry).toBeDefined();
+    expect(-entry!.net).toBeCloseTo(needed * 0.75, 9);
+    expect(entry!.covered).toBeCloseTo(needed / 4, 9);
+
+    // the per-pass column is scaled to match, or the two columns would disagree
+    const perPass = entry!.consumedPerPass - entry!.producedPerPass;
+    expect(perPass).toBeCloseTo(
+      4 * overclock(recipeData(a)).parallels * 0.75,
+      9,
+    );
+  });
+
+  it('adds up several storage nodes holding the same item', () => {
+    consumer();
+    const needed = -meLedger(state().nodes, state().edges).required.find(
+      entry => entry.name === 'Sulfur Dust',
+    )!.net;
+
+    storage([{ name: 'Sulfur Dust', rate: needed / 2 }]);
+    storage([{ name: 'Sulfur Dust', rate: needed / 2 }]);
+
+    const ledger = meLedger(state().nodes, state().edges);
+    expect(find(ledger.required, 'Sulfur Dust')).toBeUndefined();
+    expect(find(ledger.covered, 'Sulfur Dust')).toBeDefined();
+  });
+
+  it('matches stored names case- and space-insensitively', () => {
+    consumer();
+    storage([{ name: '  sulfur   dust ' }]);
+
+    expect(
+      find(meLedger(state().nodes, state().edges).covered, 'Sulfur Dust'),
+    ).toBeDefined();
+  });
+
+  it('keeps a covered item out of the metrics a line must be fed', () => {
+    consumer();
+    storage([{ name: 'Sulfur Dust' }]);
+
+    // "what must I supply" is the question lineMetrics answers in ME mode, and
+    // neither water nor anything on hand belongs in that answer
+    expect(lineMetrics(state().nodes, state().edges, true).inputs).toEqual([]);
+  });
+
+  it('says nothing about storage for an item the line never uses', () => {
+    consumer();
+    storage([{ name: 'Naquadah' }]);
+
+    const ledger = meLedger(state().nodes, state().edges);
+    expect(find(ledger.covered, 'Naquadah')).toBeUndefined();
+    expect(find(ledger.products, 'Naquadah')).toBeUndefined();
+    expect(find(ledger.balanced, 'Naquadah')).toBeUndefined();
   });
 });

@@ -51,6 +51,7 @@ export const EditableEdge = ({
 }: EdgeProps) => {
   const { screenToFlowPosition } = useReactFlow();
   const setEdgePoints = useProductionStore(state => state.setEdgePoints);
+  const meMode = useProductionStore(state => state.meMode);
   // index + live position of the waypoint being dragged (null = idle)
   const [drag, setDrag] = useState<{ index: number; pos: Waypoint } | null>(
     null,
@@ -127,7 +128,24 @@ export const EditableEdge = ({
 
   return (
     <g onDoubleClick={addPoint}>
-      <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} />
+      <BaseEdge
+        id={id}
+        path={path}
+        markerEnd={markerEnd}
+        // on an ME network an edge is not wiring but an exception TO it — this
+        // output goes straight into that machine rather than through the
+        // network — so it reads as a deliberate static pipe. the inline
+        // dasharray also beats the `animated` class, stopping the marching ants
+        style={
+          meMode
+            ? {
+                ...style,
+                stroke: 'var(--mantine-color-indigo-filled)',
+                strokeDasharray: 'none',
+              }
+            : style
+        }
+      />
 
       <EdgeLabelRenderer>
         {points.map((p, i) => (

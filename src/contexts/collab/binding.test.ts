@@ -16,7 +16,12 @@ let graph: YjsGraph;
 let binding: Binding;
 
 beforeEach(() => {
-  useProductionStore.setState({ nodes: [], edges: [] });
+  useProductionStore.setState({
+    nodes: [],
+    edges: [],
+    generator: null,
+    meMode: false,
+  });
   graph = createGraphDoc();
   binding = bindStore(graph);
 });
@@ -79,5 +84,57 @@ describe('binding: echo guard', () => {
     useProductionStore.setState({ nodes: [node('n1')] });
     expect(graph.nodes.size).toBe(1);
     expect(useProductionStore.getState().nodes).toHaveLength(1);
+  });
+});
+
+describe('binding: per-graph settings', () => {
+  it('mirrors the ME flag into the doc so it travels with the graph', () => {
+    useProductionStore.setState({ meMode: true });
+    expect(graph.meta.get('meMode')).toBe(true);
+  });
+
+  it('deletes the key rather than storing the default', () => {
+    useProductionStore.setState({ meMode: true });
+    useProductionStore.setState({ meMode: false });
+
+    // a graph that never turned ME mode on carries no entry for it, so an old
+    // snapshot and a deliberately-wired one look the same on the wire
+    expect(graph.meta.has('meMode')).toBe(false);
+  });
+
+  it('applies a remote ME flag into the store', () => {
+    graph.doc.transact(() => graph.meta.set('meMode', true), 'rtdb');
+    expect(useProductionStore.getState().meMode).toBe(true);
+  });
+
+  it('reads a graph with no stored flag as a wired line', () => {
+    graph.doc.transact(() => graph.meta.set('meMode', true), 'rtdb');
+    graph.doc.transact(() => graph.meta.delete('meMode'), 'rtdb');
+    expect(useProductionStore.getState().meMode).toBe(false);
+  });
+});
+
+describe('binding: switching graphs', () => {
+  it('does not carry a per-graph setting into the next graph', () => {
+    // the sequence session.open() runs: tear the old binding down, reset the
+    // store, then bind the next doc. Getting that order wrong would push the
+    // outgoing graph's settings into the incoming one, which is invisible until
+    // someone opens an unrelated line and finds it in ME mode
+    useProductionStore.getState().setMeMode(true);
+    expect(graph.meta.get('meMode')).toBe(true);
+
+    binding.destroy();
+    useProductionStore.getState().reset();
+
+    const next = createGraphDoc();
+    const nextBinding = bindStore(next);
+
+    expect(next.meta.get('meMode')).toBeUndefined();
+    expect(useProductionStore.getState().meMode).toBe(false);
+
+    nextBinding.destroy();
+    next.doc.destroy();
+    // afterEach destroys `binding`; rebind so that stays valid
+    binding = bindStore(graph);
   });
 });

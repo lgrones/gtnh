@@ -1,4 +1,4 @@
-import { mapRecipe, syncMirrors } from '../helpers';
+import { mapRecipe, mapStorage, syncMirrors } from '../helpers';
 import {
   type BaseRecipeNodeData,
   DEFAULT_HATCH_AMPS,
@@ -21,9 +21,16 @@ type NodeDataSlice = Pick<
   | 'removeRecipeInput'
   | 'removeRecipeOutput'
   | 'updateRecipe'
+  | 'addStorageItem'
+  | 'updateStorageItem'
+  | 'removeStorageItem'
 >;
 
 const newItem = () => ({ id: crypto.randomUUID(), name: '', quantity: 1 });
+
+// a storage row starts unlimited — no rate — because that is what declaring
+// something "on hand" usually means. Typing a number turns it into a cap
+const newStorageItem = () => ({ id: crypto.randomUUID(), name: '' });
 
 // edits to a node's own data: names, recipe items + scalar recipe fields
 export const createNodeDataSlice: SliceCreator<NodeDataSlice> = (set, get) => ({
@@ -103,6 +110,32 @@ export const createNodeDataSlice: SliceCreator<NodeDataSlice> = (set, get) => ({
   // scalar recipe fields — `multiplier` scales effective I/O, so connected sink
   // and input leaves must re-sync; the others are no-ops for mirrors but cheap.
   // switching machine shape swaps the power fields over rather than keeping both
+  addStorageItem: nodeId =>
+    set({
+      nodes: mapStorage(get().nodes, nodeId, data => ({
+        ...data,
+        items: [...data.items, newStorageItem()],
+      })),
+    }),
+
+  updateStorageItem: (nodeId, itemId, patch) =>
+    set({
+      nodes: mapStorage(get().nodes, nodeId, data => ({
+        ...data,
+        items: data.items.map(item =>
+          item.id === itemId ? { ...item, ...patch } : item,
+        ),
+      })),
+    }),
+
+  removeStorageItem: (nodeId, itemId) =>
+    set({
+      nodes: mapStorage(get().nodes, nodeId, data => ({
+        ...data,
+        items: data.items.filter(item => item.id !== itemId),
+      })),
+    }),
+
   updateRecipe: (nodeId, patch) => {
     const nodes = mapRecipe(get().nodes, nodeId, data => {
       // widened over both arms so the other shape's fields can be dropped

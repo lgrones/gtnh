@@ -13,6 +13,7 @@ export const DisposalNode = (props: NodeProps<DisposalNodeType>) => (
     type="target"
     color="orange"
     editable={false}
+    ignoredIn="me"
     leftSection={<Text pr={6}>{props.data.quantity}</Text>}
   />
 );

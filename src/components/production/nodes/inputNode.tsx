@@ -13,6 +13,7 @@ export const InputNode = (props: NodeProps<InputNodeType>) => (
     type="source"
     color="teal"
     editable={false}
+    ignoredIn="me"
     leftSection={<Text pr={6}>{props.data.quantity}</Text>}
   />
 );

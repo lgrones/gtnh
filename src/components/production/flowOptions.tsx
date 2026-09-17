@@ -10,6 +10,7 @@ import { modals } from '@mantine/modals';
 import {
   IconStarFilled,
   IconStar,
+  IconDatabase,
   IconDots,
   IconPencil,
   IconTrash,
@@ -24,6 +25,7 @@ import {
   useActiveLine,
   useProductionLibrary,
 } from '@/contexts/productionLibrary';
+import { useProductionStore } from '@/contexts/productionStore';
 
 export const FlowOptions = () => {
   const line = useActiveLine();
@@ -38,6 +40,13 @@ export const FlowOptions = () => {
         removeGraph: state.removeGraph,
       })),
     );
+
+  const meMode = useProductionStore(state => state.meMode);
+  const setMeMode = useProductionStore(state => state.setMeMode);
+  const removeNode = useProductionStore(state => state.removeNode);
+  const leafCount = useProductionStore(
+    state => state.nodes.filter(node => node.type !== 'recipeNode').length,
+  );
 
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>(
     'idle',
@@ -58,6 +67,32 @@ export const FlowOptions = () => {
       setSaveState('idle');
     }
   }, [save]);
+
+  // switching to an ME network leaves any input / output / disposal nodes with
+  // nothing to do — the ledger lists what the line needs and yields. Offer to
+  // clear them out rather than deleting someone's nodes behind their back
+  const toggleMe = () => {
+    if (meMode) {
+      setMeMode(false);
+      return;
+    }
+
+    setMeMode(true);
+
+    if (leafCount === 0) return;
+
+    modals.openConfirmModal({
+      title: 'Input and output nodes',
+      children: `An ME network has no separate input or output nodes. Remove the ${leafCount} in this line?`,
+      labels: { confirm: 'Remove', cancel: 'Keep' },
+      onConfirm: () => {
+        for (const leaf of useProductionStore
+          .getState()
+          .nodes.filter(node => node.type !== 'recipeNode'))
+          removeNode(leaf.id);
+      },
+    });
+  };
 
   if (!line) return null;
 
@@ -109,6 +144,16 @@ export const FlowOptions = () => {
           ) : (
             <IconDeviceFloppy size={16} />
           )}
+        </ActionIcon>
+      </Tooltip>
+
+      <Tooltip label="ME mode — every machine shares one AE2 network">
+        <ActionIcon
+          variant={meMode ? 'filled' : 'default'}
+          color={meMode ? 'indigo' : undefined}
+          onClick={toggleMe}
+        >
+          <IconDatabase size={16} />
         </ActionIcon>
       </Tooltip>
 

@@ -1,5 +1,6 @@
 import {
   ActionIcon,
+  Autocomplete,
   Box,
   Button,
   Checkbox,
@@ -31,10 +32,14 @@ import { useShallow } from 'zustand/shallow';
 
 import {
   DEFAULT_HATCH_AMPS,
+  itemRate,
+  useItemNames,
   useProductionStore,
   VOLTAGE_TIERS,
   type EnergyHatch,
   type ProductionNode as IProductionNode,
+  type RecipeItem,
+  type RecipeNodeData,
 } from '@/contexts/productionStore';
 import {
   AVAILABLE_COILS,
@@ -50,6 +55,7 @@ import type {
 import { basePower, overclock, recipeTier } from '@/domain/overclock';
 import { RECIPE_TIERS, TICKS_PER_SECOND } from '@/domain/tiers';
 
+import { formatRate } from '../../common/format';
 import { ProductionNode } from './productionNode';
 
 import classes from './productionNode.module.css';
@@ -302,6 +308,22 @@ const KIND_OPTIONS = [
   { value: 'multi', label: 'Multi' },
 ];
 
+// A quantity field sizes to its digits, so a seven-figure amount stays readable
+// instead of being clipped at a fixed width. The room comes out of the item name
+// beside it first — that field carries the slack and has its own floor — and only
+// once the name hits that floor does the node itself widen, which is what the
+// body's `fit-content` between `miw` and `maw` expresses.
+const quantityWidth = (quantity: number): number =>
+  Math.min(140, Math.max(60, quantity.toLocaleString().length * 9 + 22));
+
+// what one row of a recipe moves per second, shown beside it in ME mode. the
+// same figure the network ledger sums, so a machine's row and the panel agree
+const Rate = ({ data, item }: { data: RecipeNodeData; item: RecipeItem }) => (
+  <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+    {formatRate(itemRate(data, item))}/s
+  </Text>
+);
+
 export const RecipeNode = ({
   id,
   data,
@@ -326,6 +348,13 @@ export const RecipeNode = ({
       updateRecipe: state.updateRecipe,
     })),
   );
+
+  // on an ME network the throughput is the thing worth reading off a row: every
+  // machine runs continuously, so "enough" is a rate question rather than a
+  // per-batch one
+  const meMode = useProductionStore(state => state.meMode);
+
+  const itemNames = useItemNames();
 
   // the resolved machine drives which controls exist at all: nothing renders
   // unless this node's machine asks for it. overclock() is memoised per node
@@ -405,7 +434,7 @@ export const RecipeNode = ({
         />
       }
     >
-      <Stack pt="xs" w={400}>
+      <Stack pt="xs" miw={400} w="fit-content" maw={640}>
         {/* what the machine IS */}
         <Group gap="sm" wrap="nowrap">
           {data.kind === 'multi' ? (
@@ -657,15 +686,17 @@ export const RecipeNode = ({
                   id={input.id}
                   position={Position.Left}
                   className={classes['recipe-input']}
+                  data-me={meMode || undefined}
                 />
 
                 <NumberInput
                   size="sm"
-                  w={60}
+                  w={quantityWidth(input.quantity)}
                   min={1}
                   allowNegative={false}
                   allowDecimal={false}
                   hideControls
+                  thousandSeparator=","
                   value={input.quantity}
                   onChange={value =>
                     updateRecipeInput(id, input.id, {
@@ -675,19 +706,22 @@ export const RecipeNode = ({
                   }
                 />
 
-                <TextInput
+                <Autocomplete
                   size="sm"
-                  flex={1}
+                  flex="1 1 160px"
+                  miw={120}
                   placeholder="Item"
+                  data={itemNames}
+                  limit={8}
                   value={input.name}
-                  onChange={event =>
-                    updateRecipeInput(id, input.id, {
-                      name: event.currentTarget.value,
-                    })
+                  onChange={value =>
+                    updateRecipeInput(id, input.id, { name: value })
                   }
                   ref={i === arr.length - 1 ? inputRef : null}
                   onKeyDown={e => e.key === 'Enter' && addInput()}
                 />
+
+                {meMode && <Rate data={data} item={input} />}
 
                 <ActionIcon
                   variant="subtle"
@@ -727,11 +761,12 @@ export const RecipeNode = ({
               <Group key={output.id} gap="xs" className={classes.row}>
                 <NumberInput
                   size="sm"
-                  w={60}
+                  w={quantityWidth(output.quantity)}
                   min={1}
                   allowNegative={false}
                   allowDecimal={false}
                   hideControls
+                  thousandSeparator=","
                   value={output.quantity}
                   onChange={value =>
                     updateRecipeOutput(id, output.id, {
@@ -741,19 +776,22 @@ export const RecipeNode = ({
                   }
                 />
 
-                <TextInput
+                <Autocomplete
                   size="sm"
-                  flex={1}
+                  flex="1 1 160px"
+                  miw={120}
                   placeholder="Item"
+                  data={itemNames}
+                  limit={8}
                   value={output.name}
-                  onChange={event =>
-                    updateRecipeOutput(id, output.id, {
-                      name: event.currentTarget.value,
-                    })
+                  onChange={value =>
+                    updateRecipeOutput(id, output.id, { name: value })
                   }
                   ref={i === arr.length - 1 ? outputRef : null}
                   onKeyDown={e => e.key === 'Enter' && addOutput()}
                 />
+
+                {meMode && <Rate data={data} item={output} />}
 
                 <ActionIcon
                   variant="subtle"
@@ -768,6 +806,7 @@ export const RecipeNode = ({
                   id={output.id}
                   position={Position.Right}
                   className={classes.output}
+                  data-me={meMode || undefined}
                 />
               </Group>
             ))}

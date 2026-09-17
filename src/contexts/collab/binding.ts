@@ -5,6 +5,7 @@ import {
   useProductionStore,
   type GeneratorSelection,
   type ProductionNode,
+  type ProductionState,
 } from '@/contexts/productionStore';
 
 import { LOCAL_ORIGIN, stripEdge, stripNode, type YjsGraph } from './doc';
@@ -95,25 +96,37 @@ export const bindStore = (graph: YjsGraph): Binding => {
     writingLocal = false;
   };
 
-  // doc → store: the per-graph generator selection (null when unset)
+  // doc → store: the per-graph settings `meta` carries — the generator
+  // selection and the ME-network flag. a key the doc never set falls back to
+  // the same default `reset` uses, so an older graph opens as a wired line
   const pullMeta = () => {
     const generator =
       (yMeta.get('generator') as GeneratorSelection | undefined) ?? null;
+    const meMode = yMeta.get('meMode') === true;
 
     applyingRemote = true;
-    useProductionStore.setState({ generator });
+    useProductionStore.setState({ generator, meMode });
     applyingRemote = false;
   };
 
-  // store → doc: write (or clear) the generator selection under one transaction
-  const pushMeta = (generator: GeneratorSelection | null) => {
-    if (isDeepEqual(yMeta.get('generator') ?? null, generator)) return;
+  // store → doc: write (or clear) those settings under one transaction. a
+  // setting at its default is deleted rather than written, so a graph that
+  // never touched one carries no entry for it
+  const pushMeta = ({ generator, meMode }: ProductionState) => {
+    if (
+      isDeepEqual(yMeta.get('generator') ?? null, generator) &&
+      (yMeta.get('meMode') === true) === meMode
+    )
+      return;
 
     writingLocal = true;
 
     doc.transact(() => {
       if (generator) yMeta.set('generator', generator);
       else yMeta.delete('generator');
+
+      if (meMode) yMeta.set('meMode', true);
+      else yMeta.delete('meMode');
     }, LOCAL_ORIGIN);
 
     writingLocal = false;
@@ -143,7 +156,7 @@ export const bindStore = (graph: YjsGraph): Binding => {
     if (applyingRemote) return;
 
     pushToDoc(state.nodes, state.edges);
-    pushMeta(state.generator);
+    pushMeta(state);
   });
 
   return {

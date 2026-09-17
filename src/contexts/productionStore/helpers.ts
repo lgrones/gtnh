@@ -19,6 +19,7 @@ import {
   type RecipeItem,
   type RecipeKind,
   type RecipeNodeData,
+  type StorageNodeData,
   type VoltageTier,
 } from './types';
 
@@ -104,6 +105,8 @@ export const createNode = (
       return { ...base, type, data: { name: 'Output', quantity: 0 } };
     case 'disposalNode':
       return { ...base, type, data: { name: 'Disposal', quantity: 0 } };
+    case 'storageNode':
+      return { ...base, type, data: { name: 'On hand', items: [] } };
   }
 };
 
@@ -235,7 +238,7 @@ export const machineTier = (data: RecipeNodeData): VoltageTier =>
 export const machineAmps = (data: RecipeNodeData): number => data.amperage;
 
 // fallback node size when React Flow hasn't measured a node yet
-const DEFAULT_NODE_SIZE = { width: 280, height: 160 };
+const DEFAULT_NODE_SIZE = { width: 400, height: 160 };
 
 // elk.bundled.js is a ~1.4MB GWT blob — load it only when a layout is actually
 // requested (an explicit user action), not in the initial app bundle. cached
@@ -327,6 +330,18 @@ export const mapRecipe = (
       : node,
   );
 
+// update data of a single storage node, leaving other nodes untouched
+export const mapStorage = (
+  nodes: ProductionNode[],
+  nodeId: string,
+  update: (data: StorageNodeData) => StorageNodeData,
+): ProductionNode[] =>
+  nodes.map(node =>
+    node.id === nodeId && node.type === 'storageNode'
+      ? { ...node, data: update(node.data) }
+      : node,
+  );
+
 // sink (output/disposal) nodes mirror a recipe output they receive
 export const SINK_TYPES = new Set<ProductionNodeType>([
   'outputNode',
@@ -340,29 +355,54 @@ export const SINK_TYPES = new Set<ProductionNodeType>([
 export const recipeScale = (data: RecipeNodeData): number =>
   data.multiplier * overclock(data).parallels;
 
+// what one recipe row moves per pass of its node — the unit every balance check
+// has always worked in
+export const itemPerPass = (data: RecipeNodeData, item: RecipeItem): number =>
+  item.quantity * recipeScale(data);
+
+// items per SECOND one recipe row moves. `multiplier` cancels out of this:
+// running a recipe twice in sequence moves twice as much over twice the
+// wall-clock, so the rate is unchanged. parallels do not cancel — they raise
+// throughput without lengthening the cycle, which is the whole point of them
+export const itemRate = (data: RecipeNodeData, item: RecipeItem): number => {
+  const { time, parallels } = overclock(data);
+
+  // an unfilled duration is already reported as `incomplete`; answer "no
+  // throughput" rather than dividing by zero and poisoning every sum downstream
+  return time > 0 ? (item.quantity * parallels) / time : 0;
+};
+
+// how much of an item a recipe row accounts for, in one unit or the other
+type AmountOf = (data: RecipeNodeData, item: RecipeItem) => number;
+
 // `${recipeId}:${itemId}` -> recipe item, indexed for both inputs and outputs,
 // plus each recipe's item scale (cycles x parallels) keyed by node id
 interface ItemIndex {
   outputs: Map<string, RecipeItem>;
   inputs: Map<string, RecipeItem>;
   scales: Map<string, number>;
+  // each recipe node's data, so a sum can be taken in any unit an `AmountOf`
+  // knows how to compute rather than only the pre-baked `scales`
+  data: Map<string, RecipeNodeData>;
 }
 
 const indexRecipeItems = (nodes: ProductionNode[]): ItemIndex => {
   const outputs = new Map<string, RecipeItem>();
   const inputs = new Map<string, RecipeItem>();
   const scales = new Map<string, number>();
+  const data = new Map<string, RecipeNodeData>();
 
   for (const node of nodes) {
     if (node.type !== 'recipeNode') continue;
     scales.set(node.id, recipeScale(node.data));
+    data.set(node.id, node.data);
     for (const output of node.data.outputs)
       outputs.set(`${node.id}:${output.id}`, output);
     for (const input of node.data.inputs)
       inputs.set(`${node.id}:${input.id}`, input);
   }
 
-  return { outputs, inputs, scales };
+  return { outputs, inputs, scales, data };
 };
 
 // look up a recipe item by node + handle id; undefined for leaf nodes /
@@ -379,6 +419,7 @@ const recipeItem = (
 const demandByOutput = (
   index: ItemIndex,
   edges: Edge[],
+  amount: AmountOf = itemPerPass,
 ): Map<string, number> => {
   const demand = new Map<string, number>();
 
@@ -386,10 +427,12 @@ const demandByOutput = (
     if (!edge.sourceHandle || !edge.targetHandle) continue;
     const input = recipeItem(index, edge.target, edge.targetHandle, 'inputs');
     if (input === undefined) continue;
-    // scale by the consuming recipe's cycles and parallels
-    const runs = index.scales.get(edge.target) ?? 1;
+    // the consuming recipe's own data decides the amount — its cycles and
+    // parallels per pass, or its cycle time as well when summing rates
+    const data = index.data.get(edge.target);
+    if (data === undefined) continue;
     const key = `${edge.source}:${edge.sourceHandle}`;
-    demand.set(key, (demand.get(key) ?? 0) + input.quantity * runs);
+    demand.set(key, (demand.get(key) ?? 0) + amount(data, input));
   }
 
   return demand;
@@ -502,6 +545,259 @@ export const syncMirrors = (
   });
 };
 
+// ---------------------------------------------------------------------------
+// ME mode: one shared AE2 network instead of machine-to-machine wiring
+// ---------------------------------------------------------------------------
+
+// one item's standing in the network, summed over every machine in the line
+export interface LedgerEntry {
+  name: string; // display spelling (the first one seen for this key)
+  produced: number; // items/sec pushed into the network
+  consumed: number; // items/sec pulled back out of it
+  net: number; // produced - consumed
+  producedPerPass: number;
+  consumedPerPass: number;
+  producers: string[]; // node ids, so a panel row can point at the machines
+  consumers: string[];
+  // what already answers this item's shortfall, when anything does. `covered`
+  // is the items/sec absorbed — Infinity for an unlimited source
+  coveredBy?: 'storage' | 'free';
+  covered?: number;
+}
+
+export interface MeLedger {
+  required: LedgerEntry[]; // net < 0 and nothing covers it — real work
+  covered: LedgerEntry[]; // short, but storage or the world already answers it
+  products: LedgerEntry[]; // net > 0 — the end products and the byproducts
+  balanced: LedgerEntry[]; // net ~ 0 — made and eaten inside the line
+}
+
+// GTNH hands every base unlimited water — water hatches, reservoirs, rain
+// collectors. It is never the thing standing between you and a product, so the
+// ledger still reports it, but never as something you must go and supply.
+const FREELY_AVAILABLE = new Set(['water']);
+
+// items are free text, so the ledger groups on a normalized key: trimmed,
+// lowercased, internal runs of whitespace collapsed. deliberately no looser
+// than that — stripping plurals or punctuation would merge items that differ
+export const itemKey = (name: string): string =>
+  name.trim().toLowerCase().replace(/\s+/g, ' ');
+
+// rates are divisions, so an item that balances exactly can still land a few
+// ULPs off zero. without a tolerance every such intermediate would be reported
+// as something you must go and supply
+const NET_EPSILON = 1e-9;
+
+// what the whole line does to the ME network, per item.
+//
+// Edges are not wiring here — they mean "this output goes straight into that
+// machine, bypassing the network". Such an edge moves exactly what the
+// consuming input asks for, uncapped: a producer that cannot keep up simply
+// goes net-negative and the network tops the difference up, which is what
+// actually happens in game, since an input bus does not care where an item came
+// from. The consequence worth knowing is that an item's NET never depends on
+// how the line is wired — a direct edge only moves which machine is credited
+// with it. An item piped entirely direct cancels on both sides and drops out of
+// the ledger, which is the point of drawing one.
+export const meLedger = (nodes: ProductionNode[], edges: Edge[]): MeLedger => {
+  const index = indexRecipeItems(nodes);
+
+  // per producing output handle, what direct pipes carry away from it
+  const pipedRate = demandByOutput(index, edges, itemRate);
+  const pipedPass = demandByOutput(index, edges, itemPerPass);
+
+  // input handles fed by a direct pipe — their whole demand arrived over it, so
+  // they draw nothing from the network
+  const pipedInputs = new Set<string>();
+  for (const edge of edges) {
+    if (!edge.sourceHandle || !edge.targetHandle) continue;
+    if (
+      recipeItem(index, edge.target, edge.targetHandle, 'inputs') === undefined
+    )
+      continue;
+    pipedInputs.add(`${edge.target}:${edge.targetHandle}`);
+  }
+
+  // stock the base already has. Coverage is deliberately NOT production: a
+  // storage node is not a machine, so it must never make an item look like
+  // something this line yields. All it decides is whether a shortfall is real
+  // work or already answered
+  const storageRate = new Map<string, number>();
+  const storageNodes = new Map<string, string[]>();
+
+  for (const node of nodes) {
+    if (node.type !== 'storageNode') continue;
+
+    for (const item of node.data.items) {
+      const key = itemKey(item.name);
+      if (key === '') continue;
+
+      // no rate means unlimited, and Infinity absorbs any cap added beside it
+      storageRate.set(
+        key,
+        (storageRate.get(key) ?? 0) + (item.rate ?? Infinity),
+      );
+
+      const holders = storageNodes.get(key) ?? [];
+      if (!holders.includes(node.id)) holders.push(node.id);
+      storageNodes.set(key, holders);
+    }
+  }
+
+  const entries = new Map<string, LedgerEntry>();
+
+  const entryFor = (name: string): LedgerEntry => {
+    const key = itemKey(name);
+    let found = entries.get(key);
+
+    if (found === undefined)
+      entries.set(
+        key,
+        (found = {
+          name: name.trim(),
+          produced: 0,
+          consumed: 0,
+          net: 0,
+          producedPerPass: 0,
+          consumedPerPass: 0,
+          producers: [],
+          consumers: [],
+        }),
+      );
+
+    return found;
+  };
+
+  for (const node of nodes) {
+    if (node.type !== 'recipeNode') continue;
+
+    for (const output of node.data.outputs) {
+      // an unnamed row is a half-typed recipe, not an item the network holds
+      if (itemKey(output.name) === '') continue;
+
+      const key = `${node.id}:${output.id}`;
+      const rate = itemRate(node.data, output) - (pipedRate.get(key) ?? 0);
+      const pass = itemPerPass(node.data, output) - (pipedPass.get(key) ?? 0);
+
+      if (rate === 0 && pass === 0) continue;
+
+      const entry = entryFor(output.name);
+      entry.produced += rate;
+      entry.producedPerPass += pass;
+      if (!entry.producers.includes(node.id)) entry.producers.push(node.id);
+    }
+
+    for (const input of node.data.inputs) {
+      if (itemKey(input.name) === '') continue;
+      if (pipedInputs.has(`${node.id}:${input.id}`)) continue;
+
+      const rate = itemRate(node.data, input);
+      const pass = itemPerPass(node.data, input);
+
+      if (rate === 0 && pass === 0) continue;
+
+      const entry = entryFor(input.name);
+      entry.consumed += rate;
+      entry.consumedPerPass += pass;
+      if (!entry.consumers.includes(node.id)) entry.consumers.push(node.id);
+    }
+  }
+
+  const required: LedgerEntry[] = [];
+  const covered: LedgerEntry[] = [];
+  const products: LedgerEntry[] = [];
+  const balanced: LedgerEntry[] = [];
+
+  for (const entry of entries.values()) {
+    entry.net = entry.produced - entry.consumed;
+
+    if (entry.net > NET_EPSILON) {
+      products.push(entry);
+      continue;
+    }
+
+    if (entry.net >= -NET_EPSILON) {
+      balanced.push(entry);
+      continue;
+    }
+
+    // short of the item. Is anything already answering that?
+    const key = itemKey(entry.name);
+    const free = FREELY_AVAILABLE.has(key);
+    const cover = free ? Infinity : (storageRate.get(key) ?? 0);
+    const shortfall = -entry.net;
+
+    if (cover <= 0) {
+      required.push(entry);
+      continue;
+    }
+
+    entry.coveredBy = free ? 'free' : 'storage';
+    entry.covered = Math.min(cover, shortfall);
+
+    // clicking the row should frame where the item comes from as well as where
+    // it goes, so the storage nodes holding it count as producers for that
+    for (const holder of storageNodes.get(key) ?? [])
+      if (!entry.producers.includes(holder)) entry.producers.push(holder);
+
+    if (cover + NET_EPSILON >= shortfall) {
+      covered.push(entry);
+      continue;
+    }
+
+    // storage helps but does not finish the job, so what is left is still work.
+    // the per-pass figure is scaled by the same fraction as the rate, or the
+    // panel's two columns would disagree about how much is actually outstanding
+    const remaining = (shortfall - cover) / shortfall;
+    entry.consumedPerPass =
+      entry.producedPerPass +
+      (entry.consumedPerPass - entry.producedPerPass) * remaining;
+    entry.net += cover;
+    required.push(entry);
+  }
+
+  // the biggest need and the biggest yield lead their sections; intermediates
+  // are a reference list, so they read alphabetically
+  const byNet = (a: LedgerEntry, b: LedgerEntry) =>
+    Math.abs(b.net) - Math.abs(a.net);
+  const byName = (a: LedgerEntry, b: LedgerEntry) =>
+    a.name.localeCompare(b.name);
+
+  required.sort(byNet);
+  products.sort(byNet);
+  // covered and balanced are reference lists rather than to-do lists, so they
+  // read alphabetically
+  covered.sort(byName);
+  balanced.sort(byName);
+
+  return { required, covered, products, balanced };
+};
+
+// Levenshtein distance between two item keys. Item names are short, so the
+// rolling single-row DP is more than fast enough and needs no dependency
+const editDistance = (a: string, b: string): number => {
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+
+    for (let j = 1; j <= b.length; j++)
+      row[j] = Math.min(
+        (prev[j] ?? 0) + 1,
+        (row[j - 1] ?? 0) + 1,
+        (prev[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+
+    prev = row;
+  }
+
+  return prev[b.length] ?? 0;
+};
+
+// how far apart two spellings may be and still be called the same item. Two is
+// a plural plus a case slip; three starts matching genuinely different items
+const SIMILAR_DISTANCE = 2;
+
 // a problem found by validateGraph (run on demand, not while editing)
 export interface GraphIssue {
   recipe: string; // recipe node display name (receiver for deficit, else owner)
@@ -516,7 +812,8 @@ export interface GraphIssue {
     | 'underheated'
     | 'throttled'
     | 'overparallel'
-    | 'unmodeled';
+    | 'unmodeled'
+    | 'similar';
   // deficit/surplus: the output's quantity and the demand on it
   // overparallel: the parallels running under the node's ceiling, and the cap
   //   the machine would otherwise have run
@@ -620,9 +917,17 @@ const overclockIssues = (data: RecipeNodeData): GraphIssue[] => {
 //   - surplus: a recipe output has leftover quantity (incl. fully unconnected)
 //     with no sink to absorb it
 //   - unfed: a recipe input has no incoming edge (no source at all)
+//
+// all three are per-EDGE questions, so `meMode` drops them: on an ME network
+// there is nothing to wire, an unconnected input is the normal case, and
+// leftovers go into the network rather than nowhere. `meLedger` answers the
+// balance question globally instead. Everything else here — missing fields,
+// name mismatches, and the machine problems `overclockIssues` finds — is about
+// the recipe DATA rather than the wiring, so it is reported in both modes.
 export const validateGraph = (
   nodes: ProductionNode[],
   edges: Edge[],
+  meMode = false,
 ): GraphIssue[] => {
   const index = indexRecipeItems(nodes);
   const demand = demandByOutput(index, edges);
@@ -686,6 +991,8 @@ export const validateGraph = (
 
     for (const issue of overclockIssues(node.data)) issues.push(issue);
 
+    if (meMode) continue;
+
     for (const output of node.data.outputs) {
       const key = `${node.id}:${output.id}`;
       const needed = demand.get(key) ?? 0;
@@ -720,6 +1027,27 @@ export const validateGraph = (
           item: input.name,
           kind: 'unfed',
         });
+  }
+
+  // ME mode's one real failure mode. The ledger groups on the item name, so two
+  // spellings of one item split into a shortage of the one and a surplus of the
+  // other — both phantom, and both look like real work to go and do. Flagged
+  // only when the split actually happened: a near-identical pair that both
+  // balance is two genuinely different items, and saying so would be noise.
+  if (meMode) {
+    const ledger = meLedger(nodes, edges);
+
+    for (const short of ledger.required)
+      for (const spare of ledger.products)
+        if (
+          editDistance(itemKey(short.name), itemKey(spare.name)) <=
+          SIMILAR_DISTANCE
+        )
+          issues.push({
+            recipe: names.get(spare.producers[0] ?? '') ?? '',
+            item: `"${spare.name}" / "${short.name}"`,
+            kind: 'similar',
+          });
   }
 
   return issues;
@@ -871,6 +1199,7 @@ export interface LineMetrics {
 export const lineMetrics = (
   nodes: ProductionNode[],
   edges: Edge[],
+  meMode = false,
 ): LineMetrics => {
   const synced = syncMirrors(nodes, edges);
 
@@ -882,13 +1211,19 @@ export const lineMetrics = (
   for (const node of synced) {
     switch (node.type) {
       case 'inputNode':
-        inputs.push({ name: node.data.name, quantity: node.data.quantity });
+        if (!meMode)
+          inputs.push({ name: node.data.name, quantity: node.data.quantity });
         break;
       case 'outputNode':
-        outputs.push({ name: node.data.name, quantity: node.data.quantity });
+        if (!meMode)
+          outputs.push({ name: node.data.name, quantity: node.data.quantity });
         break;
       case 'disposalNode':
-        disposals.push({ name: node.data.name, quantity: node.data.quantity });
+        if (!meMode)
+          disposals.push({
+            name: node.data.name,
+            quantity: node.data.quantity,
+          });
         break;
       case 'recipeNode': {
         const machine = machines.find(
@@ -908,6 +1243,25 @@ export const lineMetrics = (
         break;
       }
     }
+  }
+
+  // an ME line has no leaves to tally: what it must be fed and what it yields
+  // are the two ends of the network ledger. reported per pass, which is the
+  // unit a wired alternative uses, so the two can be read side by side
+  if (meMode) {
+    const ledger = meLedger(nodes, edges);
+
+    for (const entry of ledger.required)
+      inputs.push({
+        name: entry.name,
+        quantity: entry.consumedPerPass - entry.producedPerPass,
+      });
+
+    for (const entry of ledger.products)
+      outputs.push({
+        name: entry.name,
+        quantity: entry.producedPerPass - entry.consumedPerPass,
+      });
   }
 
   const { time, demand } = lineEnergy(synced, edges);

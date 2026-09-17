@@ -14,6 +14,7 @@ import {
   IconBolt,
   IconCancel,
   IconClock,
+  IconDatabase,
   IconSettings,
   IconStarFilled,
   IconTrendingDown,
@@ -105,6 +106,7 @@ export const CompareModalContent = () => {
   const activeGraphId = useProductionLibrary(state => state.activeId);
   const liveNodes = useProductionStore(state => state.nodes);
   const liveEdges = useProductionStore(state => state.edges);
+  const liveMeMode = useProductionStore(state => state.meMode);
   const [normalize, setNormalize] = useState(true);
 
   // metrics per alternative: the active one from the live store, the rest decoded
@@ -113,14 +115,21 @@ export const CompareModalContent = () => {
     if (!line) return [];
 
     return line.alternatives.map(alt => {
+      // each alternative is measured under its OWN balance model: an ME line
+      // reads its inputs and outputs off the network ledger, a wired one off
+      // its leaf nodes. both report per pass, so the columns stay comparable
       const graph =
         alt.id === activeGraphId
-          ? { nodes: liveNodes, edges: liveEdges }
+          ? { nodes: liveNodes, edges: liveEdges, meMode: liveMeMode }
           : decodeGraph(graphSnapshot(alt.id));
 
-      return { alt, metrics: lineMetrics(graph.nodes, graph.edges) };
+      return {
+        alt,
+        meMode: graph.meMode,
+        metrics: lineMetrics(graph.nodes, graph.edges, graph.meMode),
+      };
     });
-  }, [line, activeGraphId, liveNodes, liveEdges]);
+  }, [line, activeGraphId, liveNodes, liveEdges, liveMeMode]);
 
   if (!line || rows.length === 0)
     return <Text c="dimmed">No alternatives to compare.</Text>;
@@ -183,7 +192,7 @@ export const CompareModalContent = () => {
         <Table.Thead>
           <Table.Tr>
             <Table.Th w={140} />
-            {rows.map(({ alt }) => (
+            {rows.map(({ alt, meMode }) => (
               <Table.Th key={alt.id}>
                 <Group gap={6}>
                   {alt.favorite && (
@@ -195,6 +204,14 @@ export const CompareModalContent = () => {
                   <Text fw={600} truncate>
                     {alt.name}
                   </Text>
+                  {meMode && (
+                    <Tooltip label="ME network — inputs and outputs come from the ledger">
+                      <IconDatabase
+                        size={12}
+                        color="var(--mantine-color-indigo-text)"
+                      />
+                    </Tooltip>
+                  )}
                 </Group>
               </Table.Th>
             ))}

@@ -14,7 +14,6 @@ import {
   MiniMap,
   Panel,
   ReactFlow,
-  ReactFlowProvider,
   useReactFlow,
 } from '@xyflow/react';
 import {
@@ -65,15 +64,12 @@ export const Flow = () => {
       </Center>
     );
 
-  return (
-    <ReactFlowProvider>
-      <FlowCanvas />
-    </ReactFlowProvider>
-  );
+  return <FlowCanvas />;
 };
 
-// the canvas body — lives inside ReactFlowProvider so it can project cursor
-// coordinates and read collab state for the active graph
+// the canvas body — the ReactFlowProvider is mounted around the whole page
+// (see routes/index.tsx) rather than here, so the side panels can frame and
+// select nodes too; this projects cursor coordinates and reads collab state
 const FlowCanvas = () => {
   const flowProps = useProductionFlow();
   const hasNodes = useProductionStore(state => state.nodes.length > 0);

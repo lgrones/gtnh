@@ -94,7 +94,7 @@ export const StatsPanel = () => {
   );
 };
 
-interface ItemsProps {
+export interface ItemsProps {
   nodes: ProductionNode[];
   type: ProductionNodeType;
   label: string;
@@ -102,7 +102,10 @@ interface ItemsProps {
   groupBy?: (node: ProductionNode) => string;
 }
 
-const Items = ({
+// a Stat whose value is a grouped tally of nodes — "3 Electric Blast Furnace
+// (HV)". exported because the ME ledger panel reuses the machine and voltage
+// tallies verbatim; only the leaf-node sections differ between the two panels
+export const Items = ({
   nodes,
   type,
   label,

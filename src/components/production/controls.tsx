@@ -1,5 +1,10 @@
 import { Menu, Text } from '@mantine/core';
-import { useHotkeys, useMousePosition, useUncontrolled } from '@mantine/hooks';
+import {
+  useHotkeys,
+  useMousePosition,
+  useUncontrolled,
+  type HotkeyItem,
+} from '@mantine/hooks';
 import { useReactFlow } from '@xyflow/react';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -57,6 +62,10 @@ export const Controls = ({
     state => (state.clipboard?.nodes.length ?? 0) > 0,
   );
 
+  // on an ME network the leaf nodes have nothing to stand in for: everything
+  // enters and leaves through the network, and the ledger reports it
+  const meMode = useProductionStore(state => state.meMode);
+
   const add = (type: ProductionNodeType) => actions.addNode(type, position);
 
   // re-layout (ELK is async, so it lives here not in the store) then frame the
@@ -74,11 +83,20 @@ export const Controls = ({
       edges: getEdges().filter(edge => edge.selected),
     });
 
+  // Ctrl+I keeps its meaning across both models — "the stuff coming in from
+  // outside this line". Wired, that is an input leaf; on an ME network it is a
+  // storage node saying another line already supplies it
+  const leafKeys: HotkeyItem[] = meMode
+    ? [['CTRL+I', () => add('storageNode')]]
+    : [
+        ['CTRL+I', () => add('inputNode')],
+        ['CTRL+O', () => add('outputNode')],
+        ['CTRL+D', () => add('disposalNode')],
+      ];
+
   useHotkeys([
-    ['CTRL+I', () => add('inputNode')],
-    ['CTRL+O', () => add('outputNode')],
+    ...leafKeys,
     ['CTRL+R', () => add('recipeNode')],
-    ['CTRL+D', () => add('disposalNode')],
     ['CTRL+Z', () => undo()],
     ['CTRL+Y', () => redo()],
     ['CTRL+C', () => actions.copySelection()],
@@ -110,26 +128,28 @@ export const Controls = ({
         <Menu.Label>Add Node</Menu.Label>
 
         <Menu.Item
-          onClick={() => add('inputNode')}
+          onClick={() => add(meMode ? 'storageNode' : 'inputNode')}
           rightSection={
             <Text size="xs" c="dimmed">
               Ctrl+I
             </Text>
           }
         >
-          Input
+          {meMode ? 'Storage' : 'Input'}
         </Menu.Item>
 
-        <Menu.Item
-          onClick={() => add('outputNode')}
-          rightSection={
-            <Text size="xs" c="dimmed">
-              Ctrl+O
-            </Text>
-          }
-        >
-          Output
-        </Menu.Item>
+        {!meMode && (
+          <Menu.Item
+            onClick={() => add('outputNode')}
+            rightSection={
+              <Text size="xs" c="dimmed">
+                Ctrl+O
+              </Text>
+            }
+          >
+            Output
+          </Menu.Item>
+        )}
 
         <Menu.Item
           onClick={() => add('recipeNode')}
@@ -142,16 +162,18 @@ export const Controls = ({
           Recipe
         </Menu.Item>
 
-        <Menu.Item
-          onClick={() => add('disposalNode')}
-          rightSection={
-            <Text size="xs" c="dimmed">
-              Ctrl+D
-            </Text>
-          }
-        >
-          Disposal
-        </Menu.Item>
+        {!meMode && (
+          <Menu.Item
+            onClick={() => add('disposalNode')}
+            rightSection={
+              <Text size="xs" c="dimmed">
+                Ctrl+D
+              </Text>
+            }
+          >
+            Disposal
+          </Menu.Item>
+        )}
 
         <Menu.Divider />
 

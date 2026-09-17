@@ -11,9 +11,13 @@ import {
 export const IssuePanel = () => {
   const nodes = useProductionStore(state => state.nodes);
   const edges = useProductionStore(state => state.edges);
+  const meMode = useProductionStore(state => state.meMode);
 
   // recompute live on every graph edit — validateGraph is cheap, no button
-  const issues = useMemo(() => validateGraph(nodes, edges), [nodes, edges]);
+  const issues = useMemo(
+    () => validateGraph(nodes, edges, meMode),
+    [nodes, edges, meMode],
+  );
 
   return (
     <Paper h="100%" p="md" component={Stack} style={{ overflow: 'auto' }}>
@@ -61,6 +65,10 @@ const issueLabel = (issue: GraphIssue): string => {
       return 'charged for but bought no time';
     case 'unmodeled':
       return 'not in the machine catalog, values used as entered';
+    case 'similar':
+      // the ledger groups on the item name, so a second spelling reads as a
+      // shortage of one item and a surplus of another, neither of them real
+      return 'one spelling is likely a typo of the other, splitting the ledger';
   }
 };
 

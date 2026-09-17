@@ -28,6 +28,8 @@ export type {
   RecipeNodeData,
   SingleblockRecipeData,
   SinkNodeData,
+  StorageItem,
+  StorageNodeData,
   VoltageTier,
   Waypoint,
 } from './types';
@@ -42,10 +44,16 @@ export {
   lineMetrics,
   demandByTier,
   recipePower,
+  itemKey,
+  itemPerPass,
+  itemRate,
+  meLedger,
   TICKS_PER_SECOND,
   type GraphIssue,
+  type LedgerEntry,
   type LineEnergy,
   type LineMetrics,
+  type MeLedger,
   type Entry as ItemAmount,
   type MachineEntry,
   type TierDemand,
@@ -63,9 +71,43 @@ export const useProductionStore = create<ProductionState>()((set, get) => ({
   generator: null,
   setGenerator: selection => set({ generator: selection }),
 
+  meMode: false,
+  setMeMode: on => set({ meMode: on }),
+
   reset: (nodes = [], edges = []) =>
-    set({ nodes: normalizeNodes(nodes), edges, generator: null }),
+    set({
+      nodes: normalizeNodes(nodes),
+      edges,
+      generator: null,
+      meMode: false,
+    }),
 }));
+
+// every item name used anywhere in the graph — recipe rows and storage rows
+// alike — offered as completions wherever an item is typed. Item names are free
+// text and are what the ME ledger groups on, so two spellings of one item split
+// it into a phantom shortage and a phantom product; the cheapest place to stop
+// that is where the name is entered
+export const useItemNames = () =>
+  useProductionStore(
+    useShallow(state => {
+      const names = new Set<string>();
+
+      const add = (name: string) => {
+        if (name.trim() !== '') names.add(name.trim());
+      };
+
+      for (const node of state.nodes) {
+        if (node.type === 'recipeNode')
+          for (const item of [...node.data.inputs, ...node.data.outputs])
+            add(item.name);
+        else if (node.type === 'storageNode')
+          for (const item of node.data.items) add(item.name);
+      }
+
+      return [...names].sort((a, b) => a.localeCompare(b));
+    }),
+  );
 
 // all props React Flow needs — spread onto <ReactFlow {...useProductionFlow()} />
 export const useProductionFlow = () =>
