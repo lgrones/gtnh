@@ -11,7 +11,7 @@ export const LOCAL_ORIGIN = 'local-store';
 // the active graph's CRDT: one Y.Map per collection, keyed by node/edge id.
 // granularity is per-node / per-edge (whole object is the map value) — cross-node
 // edits merge cleanly; concurrent edits to the same node are last-write-wins.
-// `meta` holds per-graph scalar settings (e.g. the generator selection) so they
+// `meta` holds per-graph scalar settings (the generator selection) so they
 // travel with the graph: synced live and persisted in the snapshot.
 export interface YjsGraph {
   doc: Y.Doc;

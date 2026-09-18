@@ -11,14 +11,19 @@ export type {
   BaseNodeData,
   BaseRecipeNodeData,
   Clipboard,
-  DisposalNodeData,
+  ByproductNodeData,
   EdgeData,
   EnergyHatch,
   GeneratorSelection,
   InputNodeData,
+  LineCapture,
+  LineNodeData,
+  LinePort,
+  LineTier,
   MachineConfig,
   MultiblockRecipeData,
   OutputNodeData,
+  PlaceableNodeType,
   ProductionNode,
   ProductionNodeType,
   ProductionState,
@@ -32,16 +37,22 @@ export type {
   Waypoint,
 } from './types';
 export { DEFAULT_HATCH_AMPS, DRAG_HANDLE_CLASS, VOLTAGE_TIERS } from './types';
+export type { HandleOffsets } from './helpers';
 export {
+  captureLine,
   layoutNodes,
   machineAmps,
   machineTier,
+  nodeItems,
   normalizeNodes,
   validateGraph,
   lineEnergy,
   lineMetrics,
   demandByTier,
   recipePower,
+  itemKey,
+  itemPerPass,
+  itemRate,
   TICKS_PER_SECOND,
   type GraphIssue,
   type LineEnergy,
@@ -67,6 +78,29 @@ export const useProductionStore = create<ProductionState>()((set, get) => ({
     set({ nodes: normalizeNodes(nodes), edges, generator: null }),
 }));
 
+// every item name used anywhere in the graph, offered as completions wherever
+// an item is typed. Item names are free text and are what the balance
+// arithmetic matches on, so two spellings of one item read as two items; the
+// cheapest place to stop that is where the name is entered
+export const useItemNames = () =>
+  useProductionStore(
+    useShallow(state => {
+      const names = new Set<string>();
+
+      const add = (name: string) => {
+        if (name.trim() !== '') names.add(name.trim());
+      };
+
+      for (const node of state.nodes) {
+        if (node.type === 'recipeNode')
+          for (const item of [...node.data.inputs, ...node.data.outputs])
+            add(item.name);
+      }
+
+      return [...names].sort((a, b) => a.localeCompare(b));
+    }),
+  );
+
 // all props React Flow needs — spread onto <ReactFlow {...useProductionFlow()} />
 export const useProductionFlow = () =>
   useProductionStore(
@@ -88,6 +122,7 @@ export const useProductionControls = () =>
   useProductionStore(
     useShallow(state => ({
       addNode: state.addNode,
+      addLineNode: state.addLineNode,
       removeNode: state.removeNode,
       reset: state.reset,
       renameNode: state.renameNode,
@@ -101,6 +136,7 @@ export const useProductionControls = () =>
       copySelection: state.copySelection,
       paste: state.paste,
       setNodes: state.setNodes,
+      setEdges: state.setEdges,
       deselectAll: state.deselectAll,
     })),
   );

@@ -12,8 +12,8 @@ import {
   IconArrowBigDownLines,
   IconArrowBigUpLines,
   IconBolt,
-  IconCancel,
   IconClock,
+  IconRecycle,
   IconSettings,
   IconStarFilled,
   IconTrendingDown,
@@ -126,24 +126,43 @@ export const CompareModalContent = () => {
     return <Text c="dimmed">No alternatives to compare.</Text>;
 
   // "match the largest": scale every alternative up to the one producing the
-  // most of the line's primary (first locked, else first) output. preview only.
+  // most of the line's primary output — the first locked one, else whatever it
+  // makes first. preview only.
   const primary = line.lockedOutputs[0];
   const primaryQty = (m: LineMetrics) =>
     (primary ? m.outputs.find(o => o.name === primary) : m.outputs[0])
       ?.quantity ?? 0;
   const target = Math.max(0, ...rows.map(r => primaryQty(r.metrics)));
+  const scaling = normalize;
   const factorFor = (m: LineMetrics) => {
     const q = primaryQty(m);
-    return normalize && q > 0 ? target / q : 1;
+    return scaling && q > 0 ? target / q : 1;
   };
 
   // pair each row with its display scaling factor so cells never index back in
   const view = rows.map(r => ({ ...r, factor: factorFor(r.metrics) }));
 
+  // a figure built on a recipe with no EU or no duration is a hole, not a
+  // measurement. Showing the 0 would be bad enough; ranking it would hand the
+  // green arrow to whichever alternative is least finished
+  const powerKnown = (m: LineMetrics) => m.demand > 0 || m.incomplete === 0;
+  const timeKnown = (m: LineMetrics) => m.time > 0 || m.incomplete === 0;
+
+  const gaps = (m: LineMetrics) =>
+    `${m.incomplete} recipe${m.incomplete === 1 ? '' : 's'} with no EU or duration set`;
+
   // power (EU/t) is instantaneous draw — normalizing runs a recipe longer, not
   // harder, so demand never scales. only time (and material quantities) do.
-  const rankPower = rankBy(view, x => x.metrics.demand);
-  const rankTime = rankBy(view, x => x.metrics.time * x.factor);
+  const rankPower = rankBy(
+    view,
+    x => x.metrics.demand,
+    x => powerKnown(x.metrics),
+  );
+  const rankTime = rankBy(
+    view,
+    x => x.metrics.time * x.factor,
+    x => timeKnown(x.metrics),
+  );
   const rankings: Record<
     string,
     Record<'power' | 'time', Rank>
@@ -163,7 +182,7 @@ export const CompareModalContent = () => {
         )}
 
         <Switch
-          checked={normalize}
+          checked={scaling}
           onChange={e => setNormalize(e.currentTarget.checked)}
           label="Normalize to equal output"
           disabled={target <= 0}
@@ -219,7 +238,15 @@ export const CompareModalContent = () => {
             {view.map(({ alt, metrics }) => (
               <Table.Td key={alt.id}>
                 <Group gap={4}>
-                  <Text size="sm">{fmt(metrics.demand, 1)} EU/t</Text>
+                  {powerKnown(metrics) ? (
+                    <Text size="sm">{fmt(metrics.demand, 1)} EU/t</Text>
+                  ) : (
+                    <Tooltip label={gaps(metrics)}>
+                      <Text size="sm" c="dimmed">
+                        —
+                      </Text>
+                    </Tooltip>
+                  )}
                   {rankings[alt.id]?.power === 'best' ? (
                     <IconTrendingUp
                       size={20}
@@ -253,7 +280,17 @@ export const CompareModalContent = () => {
             {view.map(({ alt, metrics, factor }) => (
               <Table.Td key={alt.id}>
                 <Group gap={4}>
-                  <Text size="sm">{formatDuration(metrics.time * factor)}</Text>
+                  {timeKnown(metrics) ? (
+                    <Text size="sm">
+                      {formatDuration(metrics.time * factor)}
+                    </Text>
+                  ) : (
+                    <Tooltip label={gaps(metrics)}>
+                      <Text size="sm" c="dimmed">
+                        —
+                      </Text>
+                    </Tooltip>
+                  )}
                   {rankings[alt.id]?.time === 'best' ? (
                     <IconTrendingUp
                       size={20}
@@ -323,9 +360,9 @@ export const CompareModalContent = () => {
           <Table.Tr>
             <Table.Th>
               <Stat
-                label="Disposals"
+                label="Byproducts"
                 icon={
-                  <IconCancel
+                  <IconRecycle
                     size={16}
                     color="var(--mantine-color-orange-filled)"
                   />
@@ -337,7 +374,7 @@ export const CompareModalContent = () => {
             {view.map(({ alt, metrics, factor }) => (
               <Table.Td key={alt.id}>
                 <ListCell
-                  items={metrics.disposals}
+                  items={metrics.byproducts}
                   label={d => amountLabel(d, factor)}
                   empty="none"
                 />

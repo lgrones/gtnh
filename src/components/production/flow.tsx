@@ -14,7 +14,6 @@ import {
   MiniMap,
   Panel,
   ReactFlow,
-  ReactFlowProvider,
   useReactFlow,
 } from '@xyflow/react';
 import {
@@ -34,11 +33,13 @@ import {
 import {
   useProductionFlow,
   useProductionStore,
+  type ProductionNode,
 } from '@/contexts/productionStore';
 
 import { AltTabs } from './altTabs';
 import { Controls } from './controls';
 import { Cursors } from './cursors';
+import { DrillCrumb } from './drillCrumb';
 import { edgeTypes } from './edges/edgeTypes';
 import { FlowOptions } from './flowOptions';
 import { nodeTypes } from './nodes/nodeTypes';
@@ -65,15 +66,12 @@ export const Flow = () => {
       </Center>
     );
 
-  return (
-    <ReactFlowProvider>
-      <FlowCanvas />
-    </ReactFlowProvider>
-  );
+  return <FlowCanvas />;
 };
 
-// the canvas body — lives inside ReactFlowProvider so it can project cursor
-// coordinates and read collab state for the active graph
+// the canvas body — the ReactFlowProvider is mounted around the whole page
+// (see routes/index.tsx) rather than here, so the side panels can frame and
+// select nodes too; this projects cursor coordinates and reads collab state
 const FlowCanvas = () => {
   const flowProps = useProductionFlow();
   const hasNodes = useProductionStore(state => state.nodes.length > 0);
@@ -81,6 +79,24 @@ const FlowCanvas = () => {
   const { status, setCursor } = useCollab(
     useShallow(state => ({ status: state.status, setCursor: state.setCursor })),
   );
+
+  const drillInto = useProductionLibrary(state => state.drillInto);
+
+  // double-clicking a collapsed sub-line opens the line it stands for, which is
+  // the only way to edit what is inside one. Its own controls (the copy count,
+  // the refresh and open buttons) keep their double-clicks — React Flow reports
+  // this for anything inside the node, including them
+  const onNodeDoubleClick = (event: MouseEvent, node: ProductionNode) => {
+    if (node.type !== 'lineNode') return;
+    if (
+      (event.target as HTMLElement | null)?.closest(
+        'input, button, [contenteditable="true"]',
+      )
+    )
+      return;
+
+    drillInto(node.data.graphId);
+  };
 
   const { screenToFlowPosition } = useReactFlow();
   const [menuOpened, setMenuOpened] = useState(false);
@@ -108,6 +124,7 @@ const FlowCanvas = () => {
         nodesDraggable
         nodesConnectable
         edgesReconnectable
+        onNodeDoubleClick={onNodeDoubleClick}
         onPaneClick={closeMenu}
         onMoveStart={closeMenu}
         onMouseMove={onMouseMove}
@@ -130,6 +147,7 @@ const FlowCanvas = () => {
 
         <Panel position="top-left">
           <Group gap="xs" align="center">
+            <DrillCrumb />
             <AltTabs />
             {status === 'loading' && <Loader size="xs" />}
           </Group>

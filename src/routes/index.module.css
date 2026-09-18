@@ -1,17 +1,30 @@
+/* the shell already places these below the header, so they fill their column
+   rather than measuring the viewport again — 100dvh here would hang the bottom
+   of the panel off the screen by exactly the header's height.
+
+   minmax(0, Nfr) rather than Nfr: an `fr` row still refuses to shrink below its
+   content, so a long issue list would push the row past the column instead of
+   scrolling inside it. Each panel owns its own scrolling (see common/panel). */
 .nav {
   display: grid;
-  grid-template-rows: 1fr 3fr;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--mantine-spacing-md);
   padding-block: var(--mantine-spacing-md);
   padding-left: var(--mantine-spacing-md);
-  height: 100dvh;
+  height: 100%;
+}
+
+/* folded away, the line list is only its own head tall and the whole rest of
+   the column goes to the panel below it — the point of collapsing it */
+.nav[data-lines-collapsed] {
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .aside {
   display: grid;
-  grid-template-rows: 3fr 1fr;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--mantine-spacing-md);
   padding-block: var(--mantine-spacing-md);
   padding-right: var(--mantine-spacing-md);
-  height: 100dvh;
+  height: 100%;
 }

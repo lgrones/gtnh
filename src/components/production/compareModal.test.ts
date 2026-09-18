@@ -43,4 +43,48 @@ describe('rankBy', () => {
     const rank = rankBy(items, x => x.d);
     expect(items.map(rank)).toEqual(['worst', 'best', 'average']);
   });
+
+  // a line with no EU entered reports 0 EU/t, and 0 is the lowest number there
+  // is. Ranking it would award the green arrow to whichever alternative is
+  // least finished, so an unmeasured one sits the comparison out
+  it('keeps an ineligible alternative out of the ranking entirely', () => {
+    const items = [
+      { d: 0, known: false },
+      { d: 30, known: true },
+      { d: 50, known: true },
+    ];
+
+    const rank = rankBy(
+      items,
+      x => x.d,
+      x => x.known,
+    );
+
+    expect(items.map(rank)).toEqual(['average', 'best', 'worst']);
+  });
+
+  it('marks everything average when nothing is eligible', () => {
+    const items = [{ d: 1 }, { d: 9 }];
+    const rank = rankBy(
+      items,
+      x => x.d,
+      () => false,
+    );
+
+    expect(items.map(rank)).toEqual(['average', 'average']);
+  });
+
+  it('leaves a lone eligible alternative average', () => {
+    const items = [
+      { d: 0, known: false },
+      { d: 7, known: true },
+    ];
+    const rank = rankBy(
+      items,
+      x => x.d,
+      x => x.known,
+    );
+
+    expect(items.map(rank)).toEqual(['average', 'average']);
+  });
 });

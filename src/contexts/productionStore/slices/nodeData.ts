@@ -1,7 +1,8 @@
-import { mapRecipe, syncMirrors } from '../helpers';
+import { mapLine, mapRecipe, nodeItems, syncMirrors } from '../helpers';
 import {
   type BaseRecipeNodeData,
   DEFAULT_HATCH_AMPS,
+  DRAG_HANDLE_CLASS,
   type EnergyHatch,
   type MachineConfig,
   type ProductionNode,
@@ -21,6 +22,9 @@ type NodeDataSlice = Pick<
   | 'removeRecipeInput'
   | 'removeRecipeOutput'
   | 'updateRecipe'
+  | 'addLineNode'
+  | 'refreshLineNode'
+  | 'setLineMultiplier'
 >;
 
 const newItem = () => ({ id: crypto.randomUUID(), name: '', quantity: 1 });
@@ -98,6 +102,63 @@ export const createNodeDataSlice: SliceCreator<NodeDataSlice> = (set, get) => ({
       edge => !(edge.source === nodeId && edge.sourceHandle === itemId),
     );
     set({ nodes: syncMirrors(nodes, edges), edges });
+  },
+
+  addLineNode: (graphId, name, capture, position) =>
+    set({
+      nodes: [
+        ...get().nodes,
+        {
+          id: crypto.randomUUID(),
+          type: 'lineNode',
+          position,
+          dragHandle: `.${DRAG_HANDLE_CLASS}`,
+          data: { name, graphId, multiplier: 1, capture },
+        },
+      ],
+    }),
+
+  // adopt a fresh reading of the source line. A port that is gone from the new
+  // capture takes its edges with it — the handle it was wired to no longer
+  // exists, and React Flow would otherwise keep drawing an edge to nowhere
+  refreshLineNode: (id, name, capture) => {
+    const nodes = mapLine(get().nodes, id, data => ({
+      ...data,
+      name,
+      capture,
+    }));
+
+    const node = nodes.find(x => x.id === id);
+    const items = node && nodeItems(node);
+
+    if (items === undefined) return;
+
+    const inputs = new Set(items.inputs.map(item => item.id));
+    const outputs = new Set(items.outputs.map(item => item.id));
+
+    const edges = get().edges.filter(
+      edge =>
+        !(
+          (edge.target === id &&
+            (!edge.targetHandle || !inputs.has(edge.targetHandle))) ||
+          (edge.source === id &&
+            (!edge.sourceHandle || !outputs.has(edge.sourceHandle)))
+        ),
+    );
+
+    set({ nodes: syncMirrors(nodes, edges), edges });
+  },
+
+  // how many times the sub-line is run, one pass after another. Its ports
+  // scale with it, so every mirror leaf hanging off them has to be re-read
+  setLineMultiplier: (id, multiplier) => {
+    const nodes = mapLine(get().nodes, id, data => ({
+      ...data,
+      // half a pass of a line is not a thing anyone runs
+      multiplier: Math.max(1, Math.round(multiplier)),
+    }));
+
+    set({ nodes: syncMirrors(nodes, get().edges) });
   },
 
   // scalar recipe fields — `multiplier` scales effective I/O, so connected sink

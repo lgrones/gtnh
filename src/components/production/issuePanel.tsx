@@ -1,4 +1,4 @@
-import { Group, Paper, Stack, Text } from '@mantine/core';
+import { Group, Text } from '@mantine/core';
 import { IconCircleCheck, IconExclamationCircle } from '@tabler/icons-react';
 import { useMemo } from 'react';
 
@@ -8,6 +8,8 @@ import {
   type GraphIssue,
 } from '@/contexts/productionStore';
 
+import { Panel } from '../common/panel';
+
 export const IssuePanel = () => {
   const nodes = useProductionStore(state => state.nodes);
   const edges = useProductionStore(state => state.edges);
@@ -16,18 +18,18 @@ export const IssuePanel = () => {
   const issues = useMemo(() => validateGraph(nodes, edges), [nodes, edges]);
 
   return (
-    <Paper h="100%" p="md" component={Stack} style={{ overflow: 'auto' }}>
-      <Group justify="space-between">
-        <Text fw={600}>Issues</Text>
-        {issues.length > 0 && (
+    <Panel
+      title="Issues"
+      action={
+        issues.length > 0 && (
           <Text size="sm" c="dimmed">
             {issues.length}
           </Text>
-        )}
-      </Group>
-
+        )
+      }
+    >
       <Validation issues={issues} />
-    </Paper>
+    </Panel>
   );
 };
 

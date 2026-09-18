@@ -1,5 +1,6 @@
 import {
   ActionIcon,
+  Autocomplete,
   Box,
   Button,
   Checkbox,
@@ -31,6 +32,7 @@ import { useShallow } from 'zustand/shallow';
 
 import {
   DEFAULT_HATCH_AMPS,
+  useItemNames,
   useProductionStore,
   VOLTAGE_TIERS,
   type EnergyHatch,
@@ -50,6 +52,7 @@ import type {
 import { basePower, overclock, recipeTier } from '@/domain/overclock';
 import { RECIPE_TIERS, TICKS_PER_SECOND } from '@/domain/tiers';
 
+import { formatAmount } from '../../common/format';
 import { ProductionNode } from './productionNode';
 
 import classes from './productionNode.module.css';
@@ -302,6 +305,14 @@ const KIND_OPTIONS = [
   { value: 'multi', label: 'Multi' },
 ];
 
+// A quantity field sizes to its digits, so a seven-figure amount stays readable
+// instead of being clipped at a fixed width. The room comes out of the item name
+// beside it first — that field carries the slack and has its own floor — and only
+// once the name hits that floor does the node itself widen, which is what the
+// body's `fit-content` between `miw` and `maw` expresses.
+const quantityWidth = (quantity: number): number =>
+  Math.min(140, Math.max(60, formatAmount(quantity).length * 9 + 22));
+
 export const RecipeNode = ({
   id,
   data,
@@ -326,6 +337,8 @@ export const RecipeNode = ({
       updateRecipe: state.updateRecipe,
     })),
   );
+
+  const itemNames = useItemNames();
 
   // the resolved machine drives which controls exist at all: nothing renders
   // unless this node's machine asks for it. overclock() is memoised per node
@@ -405,7 +418,7 @@ export const RecipeNode = ({
         />
       }
     >
-      <Stack pt="xs" w={400}>
+      <Stack pt="xs" miw={400} w="fit-content" maw={640}>
         {/* what the machine IS */}
         <Group gap="sm" wrap="nowrap">
           {data.kind === 'multi' ? (
@@ -661,11 +674,11 @@ export const RecipeNode = ({
 
                 <NumberInput
                   size="sm"
-                  w={60}
-                  min={1}
+                  w={quantityWidth(input.quantity)}
+                  min={0}
                   allowNegative={false}
-                  allowDecimal={false}
                   hideControls
+                  thousandSeparator=","
                   value={input.quantity}
                   onChange={value =>
                     updateRecipeInput(id, input.id, {
@@ -675,15 +688,16 @@ export const RecipeNode = ({
                   }
                 />
 
-                <TextInput
+                <Autocomplete
                   size="sm"
-                  flex={1}
+                  flex="1 1 160px"
+                  miw={120}
                   placeholder="Item"
+                  data={itemNames}
+                  limit={8}
                   value={input.name}
-                  onChange={event =>
-                    updateRecipeInput(id, input.id, {
-                      name: event.currentTarget.value,
-                    })
+                  onChange={value =>
+                    updateRecipeInput(id, input.id, { name: value })
                   }
                   ref={i === arr.length - 1 ? inputRef : null}
                   onKeyDown={e => e.key === 'Enter' && addInput()}
@@ -727,11 +741,11 @@ export const RecipeNode = ({
               <Group key={output.id} gap="xs" className={classes.row}>
                 <NumberInput
                   size="sm"
-                  w={60}
-                  min={1}
+                  w={quantityWidth(output.quantity)}
+                  min={0}
                   allowNegative={false}
-                  allowDecimal={false}
                   hideControls
+                  thousandSeparator=","
                   value={output.quantity}
                   onChange={value =>
                     updateRecipeOutput(id, output.id, {
@@ -741,15 +755,16 @@ export const RecipeNode = ({
                   }
                 />
 
-                <TextInput
+                <Autocomplete
                   size="sm"
-                  flex={1}
+                  flex="1 1 160px"
+                  miw={120}
                   placeholder="Item"
+                  data={itemNames}
+                  limit={8}
                   value={output.name}
-                  onChange={event =>
-                    updateRecipeOutput(id, output.id, {
-                      name: event.currentTarget.value,
-                    })
+                  onChange={value =>
+                    updateRecipeOutput(id, output.id, { name: value })
                   }
                   ref={i === arr.length - 1 ? outputRef : null}
                   onKeyDown={e => e.key === 'Enter' && addOutput()}

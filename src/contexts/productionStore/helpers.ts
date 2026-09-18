@@ -5,6 +5,7 @@ import { type Connection, type Edge } from '@xyflow/react';
 // to split it out of the main chunk (INEFFECTIVE_DYNAMIC_IMPORT). this keeps the
 // only elkjs reference the dynamic import() in getElk below.
 type ElkNode = import('elkjs/lib/elk.bundled.js').ElkNode;
+type ElkPort = import('elkjs/lib/elk.bundled.js').ElkPort;
 
 import type { MachineConfig } from '@/domain/machines/types';
 import { hatchVoltage, overclock } from '@/domain/overclock';
@@ -13,14 +14,24 @@ import { TICKS_PER_SECOND, TIER_EU } from '@/domain/tiers';
 import {
   DEFAULT_HATCH_AMPS,
   DRAG_HANDLE_CLASS,
+  type LineCapture,
+  type LineNodeData,
+  type LinePort,
+  type MachineEntry,
+  type PlaceableNodeType,
   type ProductionNode,
   type ProductionNodeType,
   type EnergyHatch,
   type RecipeItem,
   type RecipeKind,
   type RecipeNodeData,
+  type Waypoint,
   type VoltageTier,
 } from './types';
+
+// declared with the node shapes it is stored on, re-exported here so every
+// caller keeps reading the graph vocabulary out of one module
+export type { LineCapture, LinePort, MachineEntry } from './types';
 
 // collapse a burst of calls into one invocation, fired after the burst ends
 // but using the FIRST call's args — zundo's handleSet receives the pre-change
@@ -71,7 +82,7 @@ export const sameHistoryState = (
 ): boolean => historyKey(a.nodes, a.edges) === historyKey(b.nodes, b.edges);
 
 export const createNode = (
-  type: ProductionNodeType,
+  type: PlaceableNodeType,
   position: { x: number; y: number },
 ): ProductionNode => {
   const base = {
@@ -102,8 +113,8 @@ export const createNode = (
       return { ...base, type, data: { name: 'Input', quantity: 0 } };
     case 'outputNode':
       return { ...base, type, data: { name: 'Output', quantity: 0 } };
-    case 'disposalNode':
-      return { ...base, type, data: { name: 'Disposal', quantity: 0 } };
+    case 'byproductNode':
+      return { ...base, type, data: { name: 'Byproduct', quantity: 0 } };
   }
 };
 
@@ -161,7 +172,15 @@ const needsBackfill = (data: PersistedRecipe): boolean =>
     : data.voltage === undefined || data.hatches !== undefined);
 
 export const normalizeNodes = (nodes: ProductionNode[]): ProductionNode[] =>
-  nodes.map(node => {
+  nodes.map(persisted => {
+    // byproduct nodes were called disposal nodes, and graphs saved under that
+    // name still carry the old discriminator. without this they decode to a
+    // type React Flow has no renderer for and drop out of the line silently
+    const node: ProductionNode =
+      (persisted.type as string) === 'disposalNode'
+        ? ({ ...persisted, type: 'byproductNode' } as ProductionNode)
+        : persisted;
+
     if (node.type !== 'recipeNode') return node;
     const data = node.data as PersistedRecipe;
     if (!needsBackfill(data)) return node;
@@ -235,7 +254,7 @@ export const machineTier = (data: RecipeNodeData): VoltageTier =>
 export const machineAmps = (data: RecipeNodeData): number => data.amperage;
 
 // fallback node size when React Flow hasn't measured a node yet
-const DEFAULT_NODE_SIZE = { width: 280, height: 160 };
+const DEFAULT_NODE_SIZE = { width: 400, height: 160 };
 
 // elk.bundled.js is a ~1.4MB GWT blob — load it only when a layout is actually
 // requested (an explicit user action), not in the initial app bundle. cached
@@ -248,21 +267,51 @@ const getElk = () =>
     module => new module.default(),
   ));
 
-// arrange the graph into left-to-right layers with ELK. recipe input/output
-// handles become fixed-order ports (inputs WEST, outputs EAST) so ELK orders
-// nodes to keep edges aligned with each recipe's row order — minimal crossings.
+// where a recipe node's handles actually sit, measured from the DOM: node id
+// -> handle id -> centre offset from the node's top-left. feeding these to ELK
+// lets it route around nodes with the same geometry React Flow draws
+export type HandleOffsets = Map<string, Map<string, Waypoint>>;
+
+// ELK resolves an edge's endpoint by port id across the WHOLE graph, while a
+// handle id is only unique within its node — and a sub-line's ports are named
+// after the items they carry, so two lines that both move Hydrogen offer the
+// same handle id. Unnamespaced, ELK hands both edges to whichever node it saw
+// first and routes them from a machine that has nothing to do with them.
+const portId = (nodeId: string, handleId: string): string =>
+  `${nodeId}::${handleId}`;
+
+// arrange the graph into left-to-right layers with ELK and keep the routes it
+// computes. recipe input/output handles become ports (inputs WEST, outputs
+// EAST), placed at their measured offsets when those are known so ELK's
+// orthogonal routing lines up with the real handles; otherwise they are merely
+// fixed in order. the bend points ELK returns are written onto each edge as
+// waypoints, which is what stops edges cutting through nodes and each other.
 // uses measured sizes (falls back to a default); ELK returns top-left positions
 export const layoutNodes = async (
   nodes: ProductionNode[],
   edges: Edge[],
-): Promise<ProductionNode[]> => {
+  handleOffsets?: HandleOffsets,
+): Promise<{ nodes: ProductionNode[]; edges: Edge[] }> => {
   const graph: ElkNode = {
     id: 'root',
     layoutOptions: {
       'elk.algorithm': 'layered',
       'elk.direction': 'RIGHT',
-      'elk.layered.spacing.nodeNodeBetweenLayers': '96',
-      'elk.spacing.nodeNode': '32',
+      // orthogonal routing is the point of all this: ELK then owns the bend
+      // points, routing them through the gaps instead of over the nodes
+      'elk.edgeRouting': 'ORTHOGONAL',
+      // wider layer gaps than nodes need, because the gaps are also where the
+      // edge lanes live — too tight and ELK stacks routes on top of each other
+      'elk.layered.spacing.nodeNodeBetweenLayers': '160',
+      'elk.spacing.nodeNode': '48',
+      'elk.spacing.edgeNode': '24',
+      'elk.spacing.edgeEdge': '16',
+      'elk.layered.spacing.edgeNodeBetweenLayers': '24',
+      'elk.layered.spacing.edgeEdgeBetweenLayers': '16',
+      // never bundle two edges onto one shared segment: on a production line
+      // two overlapping routes read as one wire feeding the wrong machine
+      'elk.layered.mergeEdges': 'false',
+      'elk.layered.thoroughness': '20',
     },
     children: nodes.map(node => {
       const base = {
@@ -270,36 +319,71 @@ export const layoutNodes = async (
         width: node.measured?.width ?? DEFAULT_NODE_SIZE.width,
         height: node.measured?.height ?? DEFAULT_NODE_SIZE.height,
       };
-      if (node.type !== 'recipeNode') return base;
+      // recipes and collapsed sub-lines both hang their edges off per-item
+      // handles; everything else is a single anchor ELK needs no ports for
+      const items = nodeItems(node);
+      if (items === undefined) return base;
+
+      const offsets = handleOffsets?.get(node.id);
+      const port = (
+        id: string,
+        side: 'WEST' | 'EAST',
+        index: number,
+      ): ElkPort => {
+        const at = offsets?.get(id);
+        return at
+          ? {
+              id: portId(node.id, id),
+              x: at.x,
+              y: at.y,
+              width: 0,
+              height: 0,
+              layoutOptions: { 'elk.port.side': side },
+            }
+          : {
+              id: portId(node.id, id),
+              layoutOptions: {
+                'elk.port.side': side,
+                'elk.port.index': String(index),
+              },
+            };
+      };
 
       // ELK numbers ports clockwise: WEST runs bottom->top (invert the row
       // index), EAST runs top->bottom (row index as-is)
       const ports = [
-        ...node.data.inputs.map((input, i) => ({
-          id: input.id,
-          layoutOptions: {
-            'elk.port.side': 'WEST',
-            'elk.port.index': String(node.data.inputs.length - 1 - i),
-          },
-        })),
-        ...node.data.outputs.map((output, i) => ({
-          id: output.id,
-          layoutOptions: {
-            'elk.port.side': 'EAST',
-            'elk.port.index': String(i),
-          },
-        })),
+        ...items.inputs.map((input, i) =>
+          port(input.id, 'WEST', items.inputs.length - 1 - i),
+        ),
+        ...items.outputs.map((output, i) => port(output.id, 'EAST', i)),
       ];
+      // a sub-line that both produces and sheds the same item offers that port
+      // twice; ELK refuses a repeated port id, and the second one would draw on
+      // top of the first anyway
+      const unique = [...new Map(ports.map(p => [p.id, p])).values()];
+      // measured offsets pin each port exactly; without them all we can state
+      // is the order the rows appear in
+      const known = unique.every(p => p.x !== undefined);
       return {
         ...base,
-        ports,
-        layoutOptions: { 'elk.portConstraints': 'FIXED_ORDER' },
+        ports: unique,
+        layoutOptions: {
+          'elk.portConstraints': known ? 'FIXED_POS' : 'FIXED_ORDER',
+        },
       };
     }),
     edges: edges.map(edge => ({
       id: edge.id,
-      sources: [edge.sourceHandle ?? edge.source],
-      targets: [edge.targetHandle ?? edge.target],
+      sources: [
+        edge.sourceHandle
+          ? portId(edge.source, edge.sourceHandle)
+          : edge.source,
+      ],
+      targets: [
+        edge.targetHandle
+          ? portId(edge.target, edge.targetHandle)
+          : edge.target,
+      ],
     })),
   };
 
@@ -307,12 +391,39 @@ export const layoutNodes = async (
   const laid = await elk.layout(graph);
   const positions = new Map(laid.children?.map(child => [child.id, child]));
 
-  return nodes.map(node => {
-    const child = positions.get(node.id);
-    return child
-      ? { ...node, position: { x: child.x ?? 0, y: child.y ?? 0 } }
-      : node;
-  });
+  // ELK reports a route as sections of start/bend/end points in root
+  // coordinates — the same space as node positions, and as edge waypoints.
+  // only the bends are ours to keep: React Flow anchors the ends at the live
+  // handle positions itself
+  const routes = new Map(
+    laid.edges?.map(edge => [
+      edge.id,
+      (edge.sections ?? []).flatMap(section => section.bendPoints ?? []),
+    ]),
+  );
+
+  return {
+    nodes: nodes.map(node => {
+      const child = positions.get(node.id);
+      return child
+        ? { ...node, position: { x: child.x ?? 0, y: child.y ?? 0 } }
+        : node;
+    }),
+    edges: edges.map(edge => {
+      const bends = routes.get(edge.id);
+      // a route with no bends is a straight shot — drop the waypoints so the
+      // edge falls back to its default path rather than carrying stale ones
+      return {
+        ...edge,
+        data: {
+          ...edge.data,
+          points: bends?.length
+            ? bends.map(p => ({ x: p.x, y: p.y }))
+            : undefined,
+        },
+      };
+    }),
+  };
 };
 
 // update data of a single recipe node, leaving other nodes untouched
@@ -327,10 +438,22 @@ export const mapRecipe = (
       : node,
   );
 
-// sink (output/disposal) nodes mirror a recipe output they receive
+// update data of a single collapsed sub-line node, leaving other nodes untouched
+export const mapLine = (
+  nodes: ProductionNode[],
+  nodeId: string,
+  update: (data: LineNodeData) => LineNodeData,
+): ProductionNode[] =>
+  nodes.map(node =>
+    node.id === nodeId && node.type === 'lineNode'
+      ? { ...node, data: update(node.data) }
+      : node,
+  );
+
+// sink (output/byproduct) nodes mirror a recipe output they receive
 export const SINK_TYPES = new Set<ProductionNodeType>([
   'outputNode',
-  'disposalNode',
+  'byproductNode',
 ]);
 
 // how many times over a recipe's listed item quantities actually move per pass:
@@ -340,25 +463,78 @@ export const SINK_TYPES = new Set<ProductionNodeType>([
 export const recipeScale = (data: RecipeNodeData): number =>
   data.multiplier * overclock(data).parallels;
 
-// `${recipeId}:${itemId}` -> recipe item, indexed for both inputs and outputs,
-// plus each recipe's item scale (cycles x parallels) keyed by node id
+// what one recipe row moves per pass of its node — the unit every balance check
+// has always worked in
+export const itemPerPass = (data: RecipeNodeData, item: RecipeItem): number =>
+  item.quantity * recipeScale(data);
+
+// items per SECOND one recipe row moves. `multiplier` cancels out of this:
+// running a recipe twice in sequence moves twice as much over twice the
+// wall-clock, so the rate is unchanged. parallels do not cancel — they raise
+// throughput without lengthening the cycle, which is the whole point of them
+export const itemRate = (data: RecipeNodeData, item: RecipeItem): number => {
+  const { time, parallels } = overclock(data);
+
+  // an unfilled duration is already reported as `incomplete`; answer "no
+  // throughput" rather than dividing by zero and poisoning every sum downstream
+  return time > 0 ? (item.quantity * parallels) / time : 0;
+};
+
+// the items a node offers the graph as handles, and how many times over it
+// moves them per pass. Two node types have them: a recipe, whose rows are the
+// items themselves, and a collapsed sub-line, whose ports are a whole line's
+// worth of I/O. Everything downstream of this — balance, mirrors, validation —
+// asks this question and no longer cares which of the two it is holding
+export const nodeItems = (
+  node: ProductionNode,
+):
+  | {
+      inputs: readonly RecipeItem[];
+      outputs: readonly RecipeItem[];
+      scale: number;
+    }
+  | undefined => {
+  if (node.type === 'recipeNode')
+    return {
+      inputs: node.data.inputs,
+      outputs: node.data.outputs,
+      scale: recipeScale(node.data),
+    };
+
+  if (node.type === 'lineNode')
+    return {
+      inputs: node.data.capture.inputs,
+      // a sub-line's byproducts leave by the same side as its products. They
+      // are listed after them so the handles keep a stable order, and the
+      // parent decides what to do with them like any other leftover
+      outputs: [...node.data.capture.outputs, ...node.data.capture.byproducts],
+      scale: node.data.multiplier,
+    };
+
+  return undefined;
+};
+
+// `${nodeId}:${itemId}` -> item, indexed for both inputs and outputs, plus each
+// node's item scale (a recipe's cycles x parallels, a sub-line's copies)
 interface ItemIndex {
   outputs: Map<string, RecipeItem>;
   inputs: Map<string, RecipeItem>;
   scales: Map<string, number>;
 }
 
-const indexRecipeItems = (nodes: ProductionNode[]): ItemIndex => {
+const indexItems = (nodes: ProductionNode[]): ItemIndex => {
   const outputs = new Map<string, RecipeItem>();
   const inputs = new Map<string, RecipeItem>();
   const scales = new Map<string, number>();
 
   for (const node of nodes) {
-    if (node.type !== 'recipeNode') continue;
-    scales.set(node.id, recipeScale(node.data));
-    for (const output of node.data.outputs)
+    const items = nodeItems(node);
+    if (items === undefined) continue;
+
+    scales.set(node.id, items.scale);
+    for (const output of items.outputs)
       outputs.set(`${node.id}:${output.id}`, output);
-    for (const input of node.data.inputs)
+    for (const input of items.inputs)
       inputs.set(`${node.id}:${input.id}`, input);
   }
 
@@ -386,10 +562,12 @@ const demandByOutput = (
     if (!edge.sourceHandle || !edge.targetHandle) continue;
     const input = recipeItem(index, edge.target, edge.targetHandle, 'inputs');
     if (input === undefined) continue;
-    // scale by the consuming recipe's cycles and parallels
-    const runs = index.scales.get(edge.target) ?? 1;
+    // the consumer's own scale decides the amount — a recipe's cycles and
+    // parallels per pass, or the copies a sub-line node is built in
+    const scale = index.scales.get(edge.target);
+    if (scale === undefined) continue;
     const key = `${edge.source}:${edge.sourceHandle}`;
-    demand.set(key, (demand.get(key) ?? 0) + input.quantity * runs);
+    demand.set(key, (demand.get(key) ?? 0) + input.quantity * scale);
   }
 
   return demand;
@@ -402,7 +580,7 @@ export const isValidConnection = (
   nodes: ProductionNode[],
   connection: Connection | Edge,
 ): boolean => {
-  const index = indexRecipeItems(nodes);
+  const index = indexItems(nodes);
   const output =
     connection.sourceHandle &&
     recipeItem(index, connection.source, connection.sourceHandle, 'outputs');
@@ -444,7 +622,7 @@ export const freeSingleSlot = (
 };
 
 // sync every mirror leaf's name + quantity to its connected recipe item:
-//   - sinks (output/disposal) mirror the upstream recipe OUTPUT they receive,
+//   - sinks (output/byproduct) mirror the upstream recipe OUTPUT they receive,
 //     but only the leftover quantity after downstream recipes take their share
 //     (may go negative -> visible over-draw warning)
 //   - input nodes mirror the downstream recipe INPUT they feed
@@ -454,7 +632,7 @@ export const syncMirrors = (
   nodes: ProductionNode[],
   edges: Edge[],
 ): ProductionNode[] => {
-  const index = indexRecipeItems(nodes);
+  const index = indexItems(nodes);
   const demand = demandByOutput(index, edges);
 
   // leaf node id -> the name + quantity it should display
@@ -501,6 +679,25 @@ export const syncMirrors = (
       : node;
   });
 };
+
+// items are free text, so item identity is a normalized key: trimmed,
+// lowercased, internal runs of whitespace collapsed. deliberately no looser
+// than that — stripping plurals or punctuation would merge items that differ
+export const itemKey = (name: string): string =>
+  name.trim().toLowerCase().replace(/\s+/g, ' ');
+
+// rates are divisions, so an item that balances exactly can still land a few
+// ULPs off zero. without a tolerance that dust reads as a real imbalance
+const NET_EPSILON = 1e-9;
+
+// the same tolerance for per-PASS amounts, which is what the wired-mode balance
+// check compares. a fractional row — how a chance-based output is written — makes
+// those amounts floats too, and 3 runs of 0.8 lands a hair off 2.4, which reads
+// as a deficit and a surplus of the same item at once. it scales with the
+// amounts because float dust does: an epsilon that suits 2.4 is far too tight
+// against a stargate line's millions
+const balanceEpsilon = (supply: number, demand: number): number =>
+  Math.max(Math.abs(supply), Math.abs(demand), 1) * NET_EPSILON;
 
 // a problem found by validateGraph (run on demand, not while editing)
 export interface GraphIssue {
@@ -620,11 +817,15 @@ const overclockIssues = (data: RecipeNodeData): GraphIssue[] => {
 //   - surplus: a recipe output has leftover quantity (incl. fully unconnected)
 //     with no sink to absorb it
 //   - unfed: a recipe input has no incoming edge (no source at all)
+//
+// everything else here — missing fields, name mismatches, and the machine
+// problems `overclockIssues` finds — is about the recipe DATA rather than the
+// wiring.
 export const validateGraph = (
   nodes: ProductionNode[],
   edges: Edge[],
 ): GraphIssue[] => {
-  const index = indexRecipeItems(nodes);
+  const index = indexItems(nodes);
   const demand = demandByOutput(index, edges);
   const issues: GraphIssue[] = [];
 
@@ -672,27 +873,45 @@ export const validateGraph = (
   }
 
   for (const node of nodes) {
-    if (node.type !== 'recipeNode') continue;
+    if (node.type === 'recipeNode') {
+      // missing recipe fields the metrics depend on (name / energy / duration)
+      for (const field of REQUIRED_RECIPE_FIELDS)
+        if (field.missing(node.data))
+          issues.push({
+            recipe:
+              node.data.name.trim() === '' ? 'Unnamed recipe' : node.data.name,
+            item: field.label,
+            kind: 'incomplete',
+          });
 
-    // missing recipe fields the metrics depend on (name / energy / duration)
-    for (const field of REQUIRED_RECIPE_FIELDS)
-      if (field.missing(node.data))
-        issues.push({
-          recipe:
-            node.data.name.trim() === '' ? 'Unnamed recipe' : node.data.name,
-          item: field.label,
-          kind: 'incomplete',
-        });
+      for (const issue of overclockIssues(node.data)) issues.push(issue);
+    }
 
-    for (const issue of overclockIssues(node.data)) issues.push(issue);
+    // a sub-line is only as good as the line it was captured from: recipes with
+    // no EU or no duration inside it are missing from its demand and its
+    // critical path, and nothing about the collapsed node would otherwise say so
+    if (node.type === 'lineNode' && node.data.capture.incomplete > 0)
+      issues.push({
+        recipe: node.data.name,
+        item: `${node.data.capture.incomplete} unfilled recipe${
+          node.data.capture.incomplete > 1 ? 's' : ''
+        } in the source line`,
+        kind: 'incomplete',
+      });
 
-    for (const output of node.data.outputs) {
+    // recipes and collapsed sub-lines answer the balance questions alike — one
+    // per row, the other per port covering a whole line's worth of them
+    const items = nodeItems(node);
+    if (items === undefined) continue;
+
+    for (const output of items.outputs) {
       const key = `${node.id}:${output.id}`;
       const needed = demand.get(key) ?? 0;
-      // produced over all runs of this recipe
-      const supply = output.quantity * recipeScale(node.data);
+      // produced over all runs of this recipe / copies of this sub-line
+      const supply = output.quantity * items.scale;
+      const slack = balanceEpsilon(supply, needed);
 
-      if (needed > supply)
+      if (needed > supply + slack)
         // deficit — blame each receiving recipe
         for (const recipeId of receivers.get(key) ?? [])
           issues.push({
@@ -702,7 +921,7 @@ export const validateGraph = (
             supply,
             demand: needed,
           });
-      else if (!absorbed.has(key) && supply - needed > 0)
+      else if (!absorbed.has(key) && supply - needed > slack)
         // leftover with nowhere to go (no sink); includes unconnected outputs
         issues.push({
           recipe: node.data.name,
@@ -713,7 +932,7 @@ export const validateGraph = (
         });
     }
 
-    for (const input of node.data.inputs)
+    for (const input of items.inputs)
       if (!fed.has(`${node.id}:${input.id}`))
         issues.push({
           recipe: node.data.name,
@@ -739,14 +958,14 @@ const recipeTime = (data: RecipeNodeData): number =>
 
 export interface LineEnergy {
   demand: number; // peak power draw (EU/t) — all recipes assumed concurrent
-  time: number; // critical-path duration (seconds) of the whole line
+  time: number; // critical-path duration (seconds)
 }
 
 // peak demand and total runtime for a production line:
 //   - demand: Σ EU/t over every recipe (each its own machine)
 //   - time: longest dependency chain through the graph (edges = ordering).
 //     independent branches run in parallel; copying a node parallelizes its
-//     runs. node weight = recipeTime; leaf nodes (input/output/disposal) weigh 0
+//     runs. node weight = recipeTime; leaf nodes (input/output/byproduct) weigh 0
 export const lineEnergy = (
   nodes: ProductionNode[],
   edges: Edge[],
@@ -755,9 +974,19 @@ export const lineEnergy = (
 
   const weight = new Map<string, number>();
   for (const node of nodes) {
-    if (node.type !== 'recipeNode') continue;
-    demand += recipePower(node.data);
-    weight.set(node.id, recipeTime(node.data));
+    if (node.type === 'recipeNode') {
+      demand += recipePower(node.data);
+      weight.set(node.id, recipeTime(node.data));
+      continue;
+    }
+
+    // a collapsed sub-line draws what its own machines draw, and running it
+    // again does not build a second set of them: cycles cost time, not power.
+    // Another copy of the line is another node on the canvas
+    if (node.type === 'lineNode') {
+      demand += node.data.capture.demand;
+      weight.set(node.id, node.data.capture.time * node.data.multiplier);
+    }
   }
 
   // successor adjacency: an edge source must finish before its target starts
@@ -768,8 +997,16 @@ export const lineEnergy = (
     list.push(edge.target);
   }
 
-  // longest path ending-inclusive at each node, memoized; `visiting` guards
-  // against cycles (a malformed graph) by treating the back-edge as weight 0
+  return { demand, time: longestPath(successors, weight, nodes) };
+};
+
+// longest path ending-inclusive at each node, memoized; `visiting` guards
+// against cycles (a malformed graph) by treating the back-edge as weight 0
+const longestPath = (
+  successors: Map<string, string[]>,
+  weight: Map<string, number>,
+  nodes: ProductionNode[],
+): number => {
   const longest = new Map<string, number>();
   const visiting = new Set<string>();
 
@@ -792,7 +1029,7 @@ export const lineEnergy = (
   let time = 0;
   for (const node of nodes) time = Math.max(time, walk(node.id));
 
-  return { demand, time };
+  return time;
 };
 
 // electric load at a voltage tier: total power draw and peak single-machine
@@ -820,6 +1057,16 @@ export const demandByTier = (
   };
 
   for (const node of nodes) {
+    // a sub-line arrives with its buckets already split — it was summed over
+    // the machines inside it when it was captured
+    if (node.type === 'lineNode') {
+      for (const tier of node.data.capture.tiers)
+        // its cycle count changes how long those machines run, not how many
+        // there are or what any one of them pulls
+        add(tier.tier, tier.power, tier.amps);
+      continue;
+    }
+
     if (node.type !== 'recipeNode') continue;
     const power = recipePower(node.data);
     if (power <= 0) continue;
@@ -843,17 +1090,10 @@ export const demandByTier = (
   return byTier;
 };
 
-// a named amount on a leaf node (input / output / disposal)
+// a named amount on a leaf node (input / output / byproduct)
 export interface Entry {
   name: string;
   quantity: number;
-}
-
-// a machine entry for the alternatives comparison
-export interface MachineEntry {
-  machine: string;
-  quantity: number;
-  voltage: VoltageTier;
 }
 
 // the aggregate profile of a whole line, used to compare alternatives side by
@@ -862,11 +1102,80 @@ export interface MachineEntry {
 export interface LineMetrics {
   inputs: Entry[];
   outputs: Entry[];
-  disposals: Entry[];
+  byproducts: Entry[];
   machines: MachineEntry[];
   time: number; // critical-path seconds
   demand: number; // peak EU/t
+  // recipes missing the EU or the duration every figure here is built from. A
+  // line with any of these has holes in `demand` and `time`, and printing the
+  // resulting 0 as though it were a measurement is how an unfilled node wins a
+  // comparison it never ran
+  incomplete: number;
 }
+
+// tally one machine entry into a list, merging on machine + tier. the same
+// machine at two voltages is two builds, so the tier is part of the identity
+const addMachine = (machines: MachineEntry[], entry: MachineEntry) => {
+  const found = machines.find(
+    x => x.machine === entry.machine && x.voltage === entry.voltage,
+  );
+
+  if (found) found.quantity += entry.quantity;
+  else machines.push({ ...entry });
+};
+
+// leaf tallies merged per item, keyed by `itemKey` so two spellings of one item
+// do not become two ports. The key is also the handle id, which is what keeps a
+// refreshed sub-line's edges attached — see `LinePort`
+const toPorts = (entries: Entry[]): LinePort[] => {
+  const byKey = new Map<string, LinePort>();
+
+  for (const entry of entries) {
+    const id = itemKey(entry.name);
+    // a leaf nobody named has no port to offer — it would collide with every
+    // other unnamed one and answer for none of them
+    if (id === '') continue;
+
+    const port = byKey.get(id);
+    if (port) port.quantity += entry.quantity;
+    else
+      byKey.set(id, { id, name: entry.name.trim(), quantity: entry.quantity });
+  }
+
+  // a port for nothing is nothing to wire. Half-built lines are full of leaves
+  // that are not connected to anything yet, and each one would otherwise arrive
+  // in the parent graph as a handle asking to be fed zero of something
+  return [...byKey.values()].filter(port => port.quantity > 0);
+};
+
+// read a saved line down to the contract a collapsed node exposes: what it must
+// be fed, what it hands back, and what it costs to run.
+//
+// The amounts are per PASS of the source line, the same unit the parent graph's
+// balance arithmetic works in, so a sub-line's port wires to a recipe row with
+// no conversion between them.
+export const captureLine = (
+  nodes: ProductionNode[],
+  edges: Edge[],
+): LineCapture => {
+  const { inputs, outputs, byproducts, machines, time, demand, incomplete } =
+    lineMetrics(nodes, edges);
+
+  return {
+    inputs: toPorts(inputs),
+    outputs: toPorts(outputs),
+    byproducts: toPorts(byproducts),
+    machines,
+    tiers: [...demandByTier(nodes).entries()].map(([tier, entry]) => ({
+      tier,
+      power: entry.power,
+      amps: entry.amps,
+    })),
+    demand,
+    time,
+    incomplete,
+  };
+};
 
 export const lineMetrics = (
   nodes: ProductionNode[],
@@ -876,7 +1185,7 @@ export const lineMetrics = (
 
   const inputs: Entry[] = [];
   const outputs: Entry[] = [];
-  const disposals: Entry[] = [];
+  const byproducts: Entry[] = [];
   const machines: MachineEntry[] = [];
 
   for (const node of synced) {
@@ -887,30 +1196,40 @@ export const lineMetrics = (
       case 'outputNode':
         outputs.push({ name: node.data.name, quantity: node.data.quantity });
         break;
-      case 'disposalNode':
-        disposals.push({ name: node.data.name, quantity: node.data.quantity });
+      case 'byproductNode':
+        byproducts.push({ name: node.data.name, quantity: node.data.quantity });
         break;
-      case 'recipeNode': {
-        const machine = machines.find(
-          x =>
-            x.machine === node.data.machine &&
-            x.voltage === machineTier(node.data),
-        );
-
-        if (machine) machine.quantity++;
-        else
-          machines.push({
-            machine: node.data.machine,
-            quantity: 1,
-            voltage: machineTier(node.data),
-          });
-
+      case 'recipeNode':
+        addMachine(machines, {
+          machine: node.data.machine,
+          quantity: 1,
+          voltage: machineTier(node.data),
+        });
         break;
-      }
+      // the whole point of collapsing a line: the machines inside it are still
+      // machines someone has to build. One set of them, however many cycles
+      // the node runs
+      case 'lineNode':
+        for (const entry of node.data.capture.machines)
+          addMachine(machines, entry);
+        break;
     }
   }
 
-  const { time, demand } = lineEnergy(synced, edges);
+  // every gap the figures below are built on top of
+  let incomplete = 0;
+  for (const node of synced)
+    if (
+      node.type === 'recipeNode' &&
+      (node.data.eu <= 0 || node.data.time <= 0)
+    )
+      incomplete++;
+    // a sub-line's own holes are holes in this line's figures too, and they
+    // travel up however many levels the nesting goes
+    else if (node.type === 'lineNode')
+      incomplete += node.data.capture.incomplete;
 
-  return { inputs, outputs, disposals, machines, time, demand };
+  const { demand, time } = lineEnergy(synced, edges);
+
+  return { inputs, outputs, byproducts, machines, time, demand, incomplete };
 };
