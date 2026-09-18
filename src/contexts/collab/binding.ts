@@ -5,6 +5,7 @@ import {
   useProductionStore,
   type GeneratorSelection,
   type ProductionNode,
+  type ProductionState,
 } from '@/contexts/productionStore';
 
 import { LOCAL_ORIGIN, stripEdge, stripNode, type YjsGraph } from './doc';
@@ -16,6 +17,22 @@ export interface Binding {
 const isDeepEqual = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
 
+// Only ONE binding may write to its doc, and it is always the most recent one.
+//
+// `pushToDoc` is destructive by design: it deletes every node the store does
+// not have. That is correct for the graph the user is looking at and ruinous
+// for any other, so a binding that has been superseded must never run it. The
+// token lives on `globalThis` rather than in this module because the case it
+// guards against is precisely the one where this module exists twice: a dev
+// HMR update replaces `session.ts` (or anything it imports) without tearing the
+// old session down, leaving a live binding that still holds the PREVIOUS
+// graph's doc while subscribed to the store the new graph just loaded into. It
+// then mirrors the open graph's nodes into the other graph's doc, deletes that
+// graph's own, and autosaves the result over it.
+const ACTIVE = Symbol.for('gtnh.collab.activeBinding');
+
+const holder = globalThis as { [ACTIVE]?: object };
+
 // keep the Zustand store (what XYFlow renders) and the Yjs doc mirrored both
 // ways. two flags break the echo loop: a local store→doc write fires the doc
 // observer (skipped via writingLocal), and a doc→store apply fires the store
@@ -24,6 +41,12 @@ export const bindStore = (graph: YjsGraph): Binding => {
   const { doc, nodes: yNodes, edges: yEdges, meta: yMeta } = graph;
   let applyingRemote = false;
   let writingLocal = false;
+
+  // claimed before anything else runs. `pullToStore` below rewrites the store
+  // to this graph's contents, and every binding still listening would mirror
+  // THAT into its own doc — an empty new graph emptying the one just closed
+  const token = {};
+  holder[ACTIVE] = token;
 
   // doc → store: rebuild the arrays from the maps, preserving each surviving
   // node/edge's volatile UI state (selection, measured size) so a remote edit
@@ -95,7 +118,8 @@ export const bindStore = (graph: YjsGraph): Binding => {
     writingLocal = false;
   };
 
-  // doc → store: the per-graph generator selection (null when unset)
+  // doc → store: the per-graph settings `meta` carries. a key the doc never set
+  // falls back to the same default `reset` uses
   const pullMeta = () => {
     const generator =
       (yMeta.get('generator') as GeneratorSelection | undefined) ?? null;
@@ -105,8 +129,10 @@ export const bindStore = (graph: YjsGraph): Binding => {
     applyingRemote = false;
   };
 
-  // store → doc: write (or clear) the generator selection under one transaction
-  const pushMeta = (generator: GeneratorSelection | null) => {
+  // store → doc: write (or clear) those settings under one transaction. a
+  // setting at its default is deleted rather than written, so a graph that
+  // never touched one carries no entry for it
+  const pushMeta = ({ generator }: ProductionState) => {
     if (isDeepEqual(yMeta.get('generator') ?? null, generator)) return;
 
     writingLocal = true;
@@ -141,14 +167,18 @@ export const bindStore = (graph: YjsGraph): Binding => {
 
   const unsubscribe = useProductionStore.subscribe(state => {
     if (applyingRemote) return;
+    // superseded: the store now belongs to some other graph, so anything this
+    // binding wrote would be that graph's content landing in this one's doc
+    if (holder[ACTIVE] !== token) return;
 
     pushToDoc(state.nodes, state.edges);
-    pushMeta(state.generator);
+    pushMeta(state);
   });
 
   return {
     destroy: () => {
       unsubscribe();
+      if (holder[ACTIVE] === token) delete holder[ACTIVE];
       yNodes.unobserve(onDocChange);
       yEdges.unobserve(onDocChange);
       yMeta.unobserve(onMetaChange);

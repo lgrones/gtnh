@@ -1,8 +1,7 @@
-import { Divider, Group, Paper, Select, Stack, Text } from '@mantine/core';
+import { Divider, Group, Select, Stack, Text } from '@mantine/core';
 import {
   IconAlertTriangle,
   IconBolt,
-  IconClock,
   IconFlame,
   IconSettingsBolt,
 } from '@tabler/icons-react';
@@ -15,30 +14,21 @@ import {
 } from '@/contexts/productionStore';
 import { GENERATORS, planBank } from '@/domain/generators';
 
+import { Panel } from '../common/panel';
 import { Stat } from '../common/stat';
 
 // compact integer / small-decimal formatting
 const fmt = (n: number, digits = 0) =>
   n.toLocaleString(undefined, { maximumFractionDigits: digits });
 
-// seconds -> "1h 2m 3s" (drops zero leading units; "0s" when empty)
-const formatDuration = (totalSeconds: number): string => {
-  if (totalSeconds <= 0) return '0s';
-  const rounded = Math.round(totalSeconds);
-  const h = Math.floor(rounded / 3600);
-  const m = Math.floor((rounded % 3600) / 60);
-  const s = rounded % 60;
-  return [h && `${h}h`, m && `${m}m`, s && `${s}s`].filter(Boolean).join(' ');
-};
-
 export const EnergyPanel = () => {
   const nodes = useProductionStore(state => state.nodes);
   const edges = useProductionStore(state => state.edges);
+  // only `demand` is read here, and that is a sum over the machines either way
+  // — the timings this panel used to show now live with the rest of the
+  // statistics, per mode: the critical path in Statistics, the chain in ME
+  const { demand } = useMemo(() => lineEnergy(nodes, edges), [nodes, edges]);
 
-  const { demand, time } = useMemo(
-    () => lineEnergy(nodes, edges),
-    [nodes, edges],
-  );
   const byTier = useMemo(() => demandByTier(nodes), [nodes]);
 
   // picker selection lives in the store so it's saved + synced per graph (tier
@@ -59,19 +49,11 @@ export const EnergyPanel = () => {
   const plan = planBank(category, fuel, byTier);
 
   return (
-    <Paper h="100%" p="md" component={Stack} style={{ overflow: 'auto' }}>
-      <Text fw={600}>Energy</Text>
-
+    <Panel title="Energy">
       <Stat
         icon={<IconBolt size={16} color="var(--mantine-color-yellow-filled)" />}
         label="Power demand"
         value={`${fmt(demand, 1)} EU/t`}
-      />
-
-      <Stat
-        icon={<IconClock size={16} color="var(--mantine-color-blue-filled)" />}
-        label="Process time (critical path)"
-        value={formatDuration(time)}
       />
 
       <Divider label="Generator" />
@@ -175,6 +157,6 @@ export const EnergyPanel = () => {
           Set EU, time and voltage on recipe nodes to calculate generators
         </Text>
       )}
-    </Paper>
+    </Panel>
   );
 };

@@ -19,7 +19,11 @@ export const TIER_EU: Record<VoltageTier, number> = {
   UIV: 33554432,
   UMV: 134217728,
   UXV: 536870912,
-  MAX: 2147483648,
+  // not 2^31. GT's own ladder ends at `Integer.MAX_VALUE - 7`
+  // (`GTValues.V[14]`), leaving headroom so a MAX-tier figure still fits an
+  // int. V[15] above it is declared an "error tier to prevent out of bounds
+  // errors", not a tier anything runs at, so it is not here
+  MAX: 2147483640,
 };
 
 // a RECIPE's tier can be ULV (8 EU/t) even though no ULV generator exists, so

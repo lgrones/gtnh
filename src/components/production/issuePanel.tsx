@@ -1,4 +1,4 @@
-import { Group, Paper, Stack, Text } from '@mantine/core';
+import { Group, Text } from '@mantine/core';
 import { IconCircleCheck, IconExclamationCircle } from '@tabler/icons-react';
 import { useMemo } from 'react';
 
@@ -8,6 +8,8 @@ import {
   type GraphIssue,
 } from '@/contexts/productionStore';
 
+import { Panel } from '../common/panel';
+
 export const IssuePanel = () => {
   const nodes = useProductionStore(state => state.nodes);
   const edges = useProductionStore(state => state.edges);
@@ -16,22 +18,26 @@ export const IssuePanel = () => {
   const issues = useMemo(() => validateGraph(nodes, edges), [nodes, edges]);
 
   return (
-    <Paper h="100%" p="md" component={Stack} style={{ overflow: 'auto' }}>
-      <Group justify="space-between">
-        <Text fw={600}>Issues</Text>
-        {issues.length > 0 && (
+    <Panel
+      title="Issues"
+      action={
+        issues.length > 0 && (
           <Text size="sm" c="dimmed">
             {issues.length}
           </Text>
-        )}
-      </Group>
-
+        )
+      }
+    >
       <Validation issues={issues} />
-    </Paper>
+    </Panel>
   );
 };
 
-const issueLabel = (issue: GraphIssue) => {
+// the explicit `string` is what makes the switch exhaustive: without it a new
+// GraphIssue kind widens the inferred return to `string | undefined`, which JSX
+// accepts silently. With it, adding a kind fails `types:check` here until it is
+// given a label — which is the point
+const issueLabel = (issue: GraphIssue): string => {
   switch (issue.kind) {
     case 'deficit':
       return `needs ${issue.demand}, supplies ${issue.supply}`;
@@ -44,13 +50,19 @@ const issueLabel = (issue: GraphIssue) => {
     case 'mismatch':
       return 'connected item names differ';
     case 'underpowered':
-      return 'hatches cannot run this recipe';
+      return 'not enough power to run even one recipe';
+    case 'underheated':
+      // GT matches a recipe on heat before anything else, so this is a hard
+      // "will not run", not a slower run
+      return `${issue.supply} K of machine heat, recipe needs ${issue.demand} K`;
     case 'overparallel':
-      return `${issue.demand} entered, hatches can only power ${issue.supply}`;
+      return `held at ${issue.supply}, the machine would run ${issue.demand}`;
     case 'throttled':
-      return 'unused, recipe already at 1 tick';
+      // GT charges 4^n for every overclock whether or not the duration moved,
+      // so these are paid for and wasted, not merely unavailable
+      return 'charged for but bought no time';
     case 'unmodeled':
-      return 'overclock not modelled, values used as entered';
+      return 'not in the machine catalog, values used as entered';
   }
 };
 

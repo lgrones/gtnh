@@ -16,6 +16,7 @@ import { create } from 'zustand';
 
 import { useAuth } from '@/contexts/auth';
 import { decodeGraph } from '@/contexts/collab/decode';
+import { isInFolder, normalizeFolder, parentFolder } from '@/contexts/lineTree';
 import { db } from '@/infrastructure/firebase';
 
 // metadata only — the node/edge payload lives in the Yjs doc + Firestore
@@ -28,6 +29,10 @@ import { db } from '@/infrastructure/firebase';
 // item names the line commits to producing (captured the first time it branches)
 // so alternatives stay comparable. `favorite` floats an alternative to the front
 // of the line's tab strip.
+//
+// `folder` is the line's path in the library tree ('' is the root) and is a
+// property of the line, so every alternative of a line carries the same one —
+// see `@/contexts/lineTree` for why folders are a string rather than documents.
 export interface GraphMeta {
   id: string;
   name: string;
@@ -36,6 +41,7 @@ export interface GraphMeta {
   groupName: string;
   favorite: boolean;
   lockedOutputs: string[];
+  folder: string;
 }
 
 // shape of a Firestore `graphs/{id}` document (the fields we read)
@@ -47,6 +53,7 @@ interface GraphDoc {
   groupName?: string;
   favorite?: boolean;
   lockedOutputs?: string[];
+  folder?: string;
 }
 
 // the durable Yjs snapshot per graph, kept off the reactive store (it's a large
@@ -64,6 +71,7 @@ export interface Line {
   groupId: string;
   name: string;
   lockedOutputs: string[];
+  folder: string;
   alternatives: GraphMeta[];
 }
 
@@ -71,8 +79,22 @@ interface LibraryState {
   graphs: GraphMeta[];
   activeId: string | null;
   loading: boolean;
+  // per graph, how many times its durable snapshot has changed. The snapshots
+  // themselves live in a plain Map off the store (they are large and churn), so
+  // nothing reactive would otherwise notice a sub-line's source being edited —
+  // see `@/contexts/subLine`, which re-reads and caches on this counter rather
+  // than on the base64 blob it stands for
+  snapshotVersions: Record<string, number>;
 
-  createGraph: () => Promise<void>;
+  // graphs drilled through to get to the active one, oldest first. A collapsed
+  // sub-line node opens the line it stands for in this same canvas, and this is
+  // the trail back out of it. Per-browser and not persisted: it is where THIS
+  // user is looking, not a property of the graph
+  drillPath: string[];
+  drillInto: (id: string) => void;
+  drillOut: () => void;
+
+  createGraph: (folder?: string) => Promise<void>;
   selectGraph: (id: string) => void;
   renameGraph: (id: string, name: string) => Promise<void>;
   removeGraph: (id: string) => Promise<void>;
@@ -86,6 +108,12 @@ interface LibraryState {
   toggleFavorite: (id: string) => Promise<void>;
   renameLine: (groupId: string, name: string) => Promise<void>;
   removeLine: (groupId: string) => Promise<void>;
+
+  // folders (see `@/contexts/lineTree`): all three rewrite the `folder` field of
+  // the graphs concerned, since that field is the only place a folder exists
+  moveLine: (groupId: string, folder: string) => Promise<void>;
+  renameFolder: (path: string, next: string) => Promise<void>;
+  removeFolder: (path: string) => Promise<void>;
 }
 
 const graphsCol = collection(db, 'graphs');
@@ -109,8 +137,34 @@ export const useProductionLibrary = create<LibraryState>()((set, get) => ({
   graphs: [],
   activeId: null,
   loading: true,
+  snapshotVersions: {},
+  drillPath: [],
 
-  createGraph: async () => {
+  drillInto: id => {
+    const { activeId, drillPath } = get();
+    if (id === activeId) return;
+
+    set({
+      activeId: id,
+      // re-entering a line already on the trail (a diamond, not a cycle) rewinds
+      // to it rather than growing the path forever
+      drillPath: drillPath.includes(id)
+        ? drillPath.slice(0, drillPath.indexOf(id))
+        : activeId === null
+          ? drillPath
+          : [...drillPath, activeId],
+    });
+  },
+
+  drillOut: () => {
+    const drillPath = [...get().drillPath];
+    const back = drillPath.pop();
+    if (back === undefined) return;
+
+    set({ activeId: back, drillPath });
+  },
+
+  createGraph: async (folder = '') => {
     const user = useAuth.getState().user;
 
     if (!user) return;
@@ -125,6 +179,7 @@ export const useProductionLibrary = create<LibraryState>()((set, get) => ({
       groupName: `Line ${lineCount + 1}`,
       favorite: true,
       lockedOutputs: [],
+      folder: normalizeFolder(folder),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
       snapshot: null,
@@ -137,7 +192,9 @@ export const useProductionLibrary = create<LibraryState>()((set, get) => ({
     set({ activeId: ref.id });
   },
 
-  selectGraph: id => set({ activeId: id }),
+  // picking a line out of the library is leaving whatever line was drilled
+  // into, so the trail back through it goes too
+  selectGraph: id => set({ activeId: id, drillPath: [] }),
 
   renameGraph: async (id, name) => {
     await updateDoc(doc(db, 'graphs', id), {
@@ -189,6 +246,8 @@ export const useProductionLibrary = create<LibraryState>()((set, get) => ({
       groupName: source.groupName,
       favorite: false,
       lockedOutputs,
+      // the folder belongs to the line, so a new alternative lands in it too
+      folder: source.folder,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
       snapshot,
@@ -233,6 +292,51 @@ export const useProductionLibrary = create<LibraryState>()((set, get) => ({
     await batch.commit();
   },
 
+  moveLine: async (groupId, folder) => {
+    const members = get().graphs.filter(g => g.groupId === groupId);
+    const batch = writeBatch(db);
+
+    for (const member of members)
+      batch.update(doc(db, 'graphs', member.id), {
+        folder: normalizeFolder(folder),
+        updatedAt: serverTimestamp(),
+      });
+
+    await batch.commit();
+  },
+
+  // rename in place ("Base Items" -> "Ores") or move the whole subtree
+  // ("Base Items/Metals" -> "Ores/Metals"): both are the same prefix rewrite of
+  // the folder itself and everything under it. Rewriting onto an existing path
+  // merges the two folders, which is what dropping one onto the other means.
+  renameFolder: async (path, next) => {
+    const from = normalizeFolder(path);
+    const to = normalizeFolder(next);
+    // moving a folder inside itself would rewrite the paths it is being
+    // measured against halfway through, which loses the subtree
+    if (from === '' || from === to || isInFolder(to, from)) return;
+
+    const members = get().graphs.filter(g => isInFolder(g.folder, from));
+    const batch = writeBatch(db);
+
+    for (const member of members)
+      batch.update(doc(db, 'graphs', member.id), {
+        folder: normalizeFolder(to + member.folder.slice(from.length)),
+        updatedAt: serverTimestamp(),
+      });
+
+    await batch.commit();
+  },
+
+  // deleting a folder deletes no lines: everything in it moves up one level.
+  // (Which is the same rewrite as renaming it to its own parent.)
+  removeFolder: async path => {
+    const from = normalizeFolder(path);
+    if (from === '') return;
+
+    await get().renameFolder(from, parentFolder(from));
+  },
+
   removeLine: async groupId => {
     const { graphs, activeId } = get();
     const members = graphs.filter(g => g.groupId === groupId);
@@ -263,6 +367,7 @@ const buildLines = (graphs: GraphMeta[]): Line[] => {
           groupId: graph.groupId,
           name: graph.groupName,
           lockedOutputs: graph.lockedOutputs,
+          folder: normalizeFolder(graph.folder),
           alternatives: [],
         }),
       );
@@ -323,6 +428,24 @@ const syncToUser = (uid: string | null) => {
 
   useProductionLibrary.setState({ loading: true });
   unsubscribe = onSnapshot(query(graphsCol, orderBy('createdAt')), snap => {
+    const state = useProductionLibrary.getState();
+
+    // which graphs' durable payloads moved, so anything derived from ANOTHER
+    // graph's snapshot (a collapsed sub-line's capture) can tell that the line
+    // behind it changed. Counted before the cache is written, since the cache
+    // is what says what it was
+    let snapshotVersions = state.snapshotVersions;
+
+    for (const d of snap.docs) {
+      if (snapshotCache.get(d.id) === ((d.data() as GraphDoc).snapshot ?? null))
+        continue;
+
+      snapshotVersions = {
+        ...snapshotVersions,
+        [d.id]: (snapshotVersions[d.id] ?? 0) + 1,
+      };
+    }
+
     const graphs: GraphMeta[] = snap.docs.map(d => {
       const data = d.data() as GraphDoc;
 
@@ -337,16 +460,22 @@ const syncToUser = (uid: string | null) => {
         groupName: data.groupName ?? data.name,
         favorite: data.favorite ?? true,
         lockedOutputs: data.lockedOutputs ?? [],
+        // legacy docs predate folders too: they sit at the root
+        folder: normalizeFolder(data.folder ?? ''),
       };
     });
 
-    const { activeId } = useProductionLibrary.getState();
-    const stillActive = graphs.some(graph => graph.id === activeId);
+    const stillActive = graphs.some(graph => graph.id === state.activeId);
+    const ids = new Set(graphs.map(graph => graph.id));
 
     useProductionLibrary.setState({
       graphs,
-      activeId: stillActive ? activeId : (graphs[0]?.id ?? null),
+      activeId: stillActive ? state.activeId : (graphs[0]?.id ?? null),
       loading: false,
+      snapshotVersions,
+      // a line deleted out from under the trail must not be somewhere "back"
+      // still leads to
+      drillPath: state.drillPath.filter(id => ids.has(id)),
     });
   });
 };
@@ -361,4 +490,16 @@ const onUser = (uid: string | null) => {
 };
 
 onUser(useAuth.getState().user?.uid ?? null);
-useAuth.subscribe(state => onUser(state.user?.uid ?? null));
+const unsubscribeAuth = useAuth.subscribe(state =>
+  onUser(state.user?.uid ?? null),
+);
+
+// the Firestore listener and the auth subscription outlive a module reload and
+// would otherwise stack up one live copy per dev-server HMR update
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    unsubscribeAuth();
+    unsubscribe?.();
+    unsubscribe = undefined;
+  });
+}

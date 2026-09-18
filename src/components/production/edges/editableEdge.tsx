@@ -9,17 +9,38 @@ import { useState, type MouseEvent, type PointerEvent } from 'react';
 
 import { useProductionStore, type Waypoint } from '@/contexts/productionStore';
 
-// a straight polyline through source -> waypoints -> target
+// how far a corner is rounded off, in flow units — matches the stock smoothstep
+// edge so hand-routed and auto-routed edges read as the same kind of line
+const CORNER = 8;
+
+// pull a point towards its neighbour by at most CORNER, for the arc endpoints
+const towards = (from: Waypoint, to: Waypoint): Waypoint => {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return from;
+  const step = Math.min(CORNER, len / 2);
+  return { x: from.x + (dx / len) * step, y: from.y + (dy / len) * step };
+};
+
+// a polyline through source -> waypoints -> target, with its corners rounded.
+// square corners on a dense graph turn every route into a maze; the arcs make
+// which line goes where readable at a glance
 const toPath = (points: Waypoint[]): string => {
   const first = points[0];
-  if (!first) return '';
-  return (
-    `M ${first.x},${first.y}` +
-    points
-      .slice(1)
-      .map(p => ` L ${p.x},${p.y}`)
-      .join('')
-  );
+  const last = points[points.length - 1];
+  if (!first || !last) return '';
+  let path = `M ${first.x},${first.y}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const prev = points[i - 1];
+    const corner = points[i];
+    const next = points[i + 1];
+    if (!prev || !corner || !next) continue;
+    const into = towards(corner, prev);
+    const out = towards(corner, next);
+    path += ` L ${into.x},${into.y} Q ${corner.x},${corner.y} ${out.x},${out.y}`;
+  }
+  return points.length > 1 ? `${path} L ${last.x},${last.y}` : path;
 };
 
 // distance from point p to segment a-b, for choosing which segment a new
@@ -48,6 +69,7 @@ export const EditableEdge = ({
   targetPosition,
   markerEnd,
   style,
+  selected,
 }: EdgeProps) => {
   const { screenToFlowPosition } = useReactFlow();
   const setEdgePoints = useProductionStore(state => state.setEdgePoints);
@@ -55,6 +77,11 @@ export const EditableEdge = ({
   const [drag, setDrag] = useState<{ index: number; pos: Waypoint } | null>(
     null,
   );
+  // auto-layout now routes every edge, so the graph carries far more waypoints
+  // than the hand-placed ones it used to — showing every dot all the time would
+  // bury the lines. reveal them on the edge the user is actually pointing at
+  const [hovered, setHovered] = useState(false);
+  const showPoints = hovered || selected === true || drag !== null;
 
   const stored = (data?.points as Waypoint[] | undefined) ?? [];
   // apply the in-flight drag so the path follows the cursor before commit
@@ -126,33 +153,38 @@ export const EditableEdge = ({
   };
 
   return (
-    <g onDoubleClick={addPoint}>
+    <g
+      onDoubleClick={addPoint}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+    >
       <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} />
 
       <EdgeLabelRenderer>
-        {points.map((p, i) => (
-          <div
-            key={i}
-            // nopan/nodrag stop the pane from panning while a dot is dragged
-            className="nopan nodrag"
-            onPointerDown={startDrag(i)}
-            onPointerMove={moveDrag}
-            onPointerUp={endDrag}
-            onDoubleClick={removePoint(i)}
-            title="Drag to move · double-click to remove"
-            style={{
-              position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${p.x}px, ${p.y}px)`,
-              width: 10,
-              height: 10,
-              borderRadius: '50%',
-              background: 'var(--mantine-color-body)',
-              border: '2px solid var(--xy-edge-stroke-default, currentColor)',
-              cursor: 'grab',
-              pointerEvents: 'all',
-            }}
-          />
-        ))}
+        {showPoints &&
+          points.map((p, i) => (
+            <div
+              key={i}
+              // nopan/nodrag stop the pane from panning while a dot is dragged
+              className="nopan nodrag"
+              onPointerDown={startDrag(i)}
+              onPointerMove={moveDrag}
+              onPointerUp={endDrag}
+              onDoubleClick={removePoint(i)}
+              title="Drag to move · double-click to remove"
+              style={{
+                position: 'absolute',
+                transform: `translate(-50%, -50%) translate(${p.x}px, ${p.y}px)`,
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                background: 'var(--mantine-color-body)',
+                border: '2px solid var(--xy-edge-stroke-default, currentColor)',
+                cursor: 'grab',
+                pointerEvents: 'all',
+              }}
+            />
+          ))}
       </EdgeLabelRenderer>
     </g>
   );

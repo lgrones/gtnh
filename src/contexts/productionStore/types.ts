@@ -9,11 +9,23 @@ import {
 } from '@xyflow/react';
 import { type StoreApi } from 'zustand';
 
+import type { MachineConfig } from '@/domain/machines/types';
+
+// re-exported so a node's own fields can be typed without reaching into the
+// domain layer for the one bag the store persists
+export type { MachineConfig };
+
 export type ProductionNodeType =
   | 'inputNode'
   | 'outputNode'
   | 'recipeNode'
-  | 'disposalNode';
+  | 'byproductNode'
+  | 'lineNode';
+
+// every node type someone can drop on the canvas blank. a line node is the one
+// exception: it stands for a saved line, so it cannot exist before one is
+// picked and is created through `addLineNode` instead
+export type PlaceableNodeType = Exclude<ProductionNodeType, 'lineNode'>;
 
 // class on the grip element; React Flow's dragHandle selector targets it (needs leading dot)
 export const DRAG_HANDLE_CLASS = 'drag-handle_production';
@@ -53,7 +65,12 @@ export interface EdgeData extends Record<string, unknown> {
 export interface RecipeItem {
   id: string; // crypto.randomUUID()
   name: string; // editable item name
-  quantity: number; // amount per cycle
+  // amount per cycle. fractional on purpose: plenty of GT recipes only produce
+  // an output with some chance, and the line's arithmetic wants the average —
+  // a 5% bonus slag is written as 0.05. every consumer of this is a
+  // multiplication, so a fraction needs no special case beyond a balance
+  // tolerance (see `balanceEpsilon`) and formatting (see `formatAmount`)
+  quantity: number;
 }
 
 // shared by every node — editable display name
@@ -68,11 +85,11 @@ export interface SinkNodeData extends BaseNodeData {
 // input nodes are now mirror leaves too (reverse of output nodes)
 export type InputNodeData = SinkNodeData;
 export type OutputNodeData = SinkNodeData;
-export type DisposalNodeData = SinkNodeData;
+export type ByproductNodeData = SinkNodeData;
 
-// which of the two machine shapes a recipe node represents. singleblocks keep
-// the original free-text/no-overclock behaviour; multiblocks pick their machine
-// from the catalog (@/domain/multiblocks) and overclock against their hatches
+// which of the two machine shapes a recipe node represents. a singleblock is
+// free text and is fed by its own tier; a multiblock picks its machine from the
+// generated catalog (@/domain/machines) and is fed by its hatches
 export type RecipeKind = 'single' | 'multi';
 
 // one group of identical energy hatches feeding a multiblock. the common case is
@@ -80,7 +97,16 @@ export type RecipeKind = 'single' | 'multi';
 export interface EnergyHatch {
   tier: VoltageTier;
   count: number;
+  // maxWorkingAmperesIn for one hatch of this group. every standard GT energy
+  // hatch takes 2 A; laser and wireless hatches take far more, which is the
+  // only reason this is a field and not a constant. GT reads it as
+  // getMaxInputAmps() — the sum over every hatch — and that is a different
+  // quantity from the tier sum the parallel formulas use
+  amps: number;
 }
+
+// what every standard GT energy hatch delivers
+export const DEFAULT_HATCH_AMPS = 2;
 
 // the fields both machine shapes share. how each is FED differs — a singleblock
 // by its own tier, a multiblock by its energy hatches — so those live on their
@@ -106,20 +132,31 @@ export interface SingleblockRecipeData extends BaseRecipeNodeData {
 
 export interface MultiblockRecipeData extends BaseRecipeNodeData {
   kind: 'multi';
-  hatches: EnergyHatch[]; // what feeds it — their summed EU/t is its supply
-  // only meaningful for catalog entries classed `mixed`, which can overclock
-  // either way; ignored for every other machine. defaults to imperfect
-  overclock?: 'imperfect' | 'perfect';
-  // concurrent recipes the machine offers. the wiki tabulates no per-machine
-  // figure, so it is entered per node; absent means 1. only as many as the
-  // supplied power can pay for actually run
-  parallels?: number;
+  // what feeds it. GT reads three different numbers off this list — see
+  // hatchSupply in @/domain/overclock
+  hatches: EnergyHatch[];
+
+  // the machine's own parameters — which coils are in it, what tier its pipe
+  // casings are. a bag rather than named fields because the machine DATA
+  // declares which parameters exist; typing them here would put that
+  // declaration in two places and make adding a machine a TypeScript change.
+  // safety comes back at the one read boundary, resolveMachine, which validates
+  // and defaults every value. absent means every parameter at its default
+  config?: MachineConfig;
+
+  // the recipe's mSpecialValue in K, as NEI prints it. a property of the RECIPE,
+  // not the machine, and only offered when the machine reads heat at all
+  recipeHeat?: number;
+
+  // an optional ceiling the user puts on parallels. absent means the machine's
+  // own cap stands, which is the normal case now that the cap is real data
+  parallelLimit?: number;
 }
 
 export type RecipeNodeData = SingleblockRecipeData | MultiblockRecipeData;
 
 // the scalar fields `updateRecipe` may patch. spelled out rather than Pick'd off
-// the union, since `overclock` and `kind` exist on only one arm of it
+// the union, since `kind` and the power fields exist on only one arm of it
 export interface RecipeFields extends Pick<
   BaseRecipeNodeData,
   'machine' | 'multiplier' | 'eu' | 'time'
@@ -128,16 +165,75 @@ export interface RecipeFields extends Pick<
   voltage: VoltageTier;
   amperage: number;
   hatches: EnergyHatch[];
-  overclock?: 'imperfect' | 'perfect';
-  parallels?: number;
+  config?: MachineConfig;
+  recipeHeat?: number;
+  parallelLimit?: number;
+}
+
+// a machine entry for the alternatives comparison, and for the machine tally a
+// collapsed sub-line carries around with it
+export interface MachineEntry {
+  machine: string;
+  quantity: number;
+  voltage: VoltageTier;
+}
+
+// one voltage bucket of a sub-line's draw, as `demandByTier` reports it. an
+// array rather than the Map that function returns, because this one is
+// persisted into a node and has to survive JSON
+export interface LineTier {
+  tier: VoltageTier;
+  power: number; // EU/t summed over the machines at this tier
+  amps: number; // highest single machine's draw at this tier
+}
+
+// one port of a collapsed sub-line: what it takes in, or gives out, over one
+// full pass of that line at multiplier 1. Structurally a `RecipeItem`, so the
+// balance code treats a sub-line's ports exactly as it treats a recipe's rows
+export interface LinePort {
+  // `itemKey` of the name, and also the React Flow handle id. Deterministic on
+  // purpose: a refresh that re-captures the same item lands on the same handle,
+  // so the edges wired to it stay wired
+  id: string;
+  name: string;
+  quantity: number;
+}
+
+// what a saved line takes, gives and costs — read off that line's own leaves
+// and recipes by `captureLine`. This is the whole contract a collapsed sub-line
+// exposes to the graph it sits in; nothing else about the source is carried
+export interface LineCapture {
+  inputs: LinePort[]; // what its input leaves ask the outside world for
+  outputs: LinePort[]; // what its output leaves hand back
+  byproducts: LinePort[]; // what its byproduct leaves shed
+  machines: MachineEntry[]; // every machine inside it, for the parent's tally
+  tiers: LineTier[]; // its draw per voltage tier, for generator sizing
+  demand: number; // peak EU/t of the whole sub-line
+  time: number; // its critical path, in seconds
+  // recipes inside it missing the EU or the duration. A sub-line with holes in
+  // it reports a demand and a time that are short by however much those would
+  // have added, and the parent has no way to see that without being told
+  incomplete: number;
+}
+
+// a whole saved line, collapsed into one node. It holds a CAPTURE rather than a
+// live reading of the line it names: the source is edited elsewhere (and by
+// other people), and a contract that silently re-plans the graph around it is
+// worse than one that says it went out of date. `refreshLineNode` adopts the
+// new reading when the user asks for it
+export interface LineNodeData extends BaseNodeData {
+  graphId: string; // the library graph this node stands for
+  multiplier: number; // cycles run in sequence — scales its I/O and its time
+  capture: LineCapture; // its I/O + cost, as of the last capture
 }
 
 // node typed per variant so data matches the node `type`
 export type ProductionNode =
   | Node<InputNodeData, 'inputNode'>
   | Node<OutputNodeData, 'outputNode'>
-  | Node<DisposalNodeData, 'disposalNode'>
-  | Node<RecipeNodeData, 'recipeNode'>;
+  | Node<ByproductNodeData, 'byproductNode'>
+  | Node<RecipeNodeData, 'recipeNode'>
+  | Node<LineNodeData, 'lineNode'>;
 
 export interface Clipboard {
   nodes: ProductionNode[];
@@ -166,7 +262,7 @@ export interface ProductionState {
 
   // node ops
   addNode: (
-    type: ProductionNodeType,
+    type: PlaceableNodeType,
     position: { x: number; y: number },
   ) => void;
   removeNode: (id: string) => void;
@@ -211,6 +307,24 @@ export interface ProductionState {
   removeRecipeInput: (nodeId: string, itemId: string) => void;
   removeRecipeOutput: (nodeId: string, itemId: string) => void;
   updateRecipe: (nodeId: string, patch: Partial<RecipeFields>) => void;
+
+  // sub-line nodes (no-op if node is not a line node)
+  //
+  // drop a saved line in as a single node. The capture is taken by the caller,
+  // which is the only side that can reach the library
+  addLineNode: (
+    graphId: string,
+    name: string,
+    capture: LineCapture,
+    position: { x: number; y: number },
+  ) => void;
+  // adopt a fresh reading of the source line. Ports that went away take their
+  // edges with them; the rest keep theirs, since a port's handle id is derived
+  // from its item name
+  refreshLineNode: (id: string, name: string, capture: LineCapture) => void;
+  // how many copies of the sub-line are built. Scales its I/O and its draw;
+  // copies run side by side, so the critical path is unchanged
+  setLineMultiplier: (id: string, multiplier: number) => void;
 }
 
 // a slice contributes part of the store; it gets the full store's set/get so
