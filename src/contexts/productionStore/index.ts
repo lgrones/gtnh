@@ -1,11 +1,13 @@
+import { useStore as useFlowStore, type ReactFlowState } from '@xyflow/react';
 import { create } from 'zustand/react';
+import { shallow } from 'zustand/shallow';
 import { useShallow } from 'zustand/react/shallow';
 
 import { normalizeNodes } from './helpers';
 import { createClipboardSlice } from './slices/clipboard';
 import { createGraphSlice } from './slices/graph';
 import { createNodeDataSlice } from './slices/nodeData';
-import { type ProductionState } from './types';
+import { type ProductionNode, type ProductionState } from './types';
 
 export type {
   BaseNodeData,
@@ -81,25 +83,35 @@ export const useProductionStore = create<ProductionState>()((set, get) => ({
 // every item name used anywhere in the graph, offered as completions wherever
 // an item is typed. Item names are free text and are what the balance
 // arithmetic matches on, so two spellings of one item read as two items; the
-// cheapest place to stop that is where the name is entered
-export const useItemNames = () =>
-  useProductionStore(
-    useShallow(state => {
-      const names = new Set<string>();
+// cheapest place to stop that is where the name is entered.
+//
+// Read from XYFlow's store rather than this one, even though this one is the
+// source of truth: XYFlow copies the `nodes` prop into its own store in an
+// effect, so for one commit its nodes lag this store. A node subscribed to
+// BOTH re-renders on that lagging commit with the name it is being told to
+// forget still in `data` — and React, seeing a controlled input whose value
+// disagrees with the DOM, writes the stale name back and drops the caret at
+// the end of it. Subscribing to the same store the node's own `data` comes
+// from means completions and data always arrive together.
+const collectItemNames = (state: ReactFlowState): string[] => {
+  const names = new Set<string>();
 
-      const add = (name: string) => {
-        if (name.trim() !== '') names.add(name.trim());
-      };
+  const add = (name: string) => {
+    if (name.trim() !== '') names.add(name.trim());
+  };
 
-      for (const node of state.nodes) {
-        if (node.type === 'recipeNode')
-          for (const item of [...node.data.inputs, ...node.data.outputs])
-            add(item.name);
-      }
+  for (const node of state.nodes as ProductionNode[]) {
+    if (node.type === 'recipeNode')
+      for (const item of [...node.data.inputs, ...node.data.outputs])
+        add(item.name);
+  }
 
-      return [...names].sort((a, b) => a.localeCompare(b));
-    }),
-  );
+  return [...names].sort((a, b) => a.localeCompare(b));
+};
+
+// only valid inside the flow — XYFlow's store lives in React context
+export const useItemNames = (): string[] =>
+  useFlowStore(collectItemNames, shallow);
 
 // all props React Flow needs — spread onto <ReactFlow {...useProductionFlow()} />
 export const useProductionFlow = () =>
