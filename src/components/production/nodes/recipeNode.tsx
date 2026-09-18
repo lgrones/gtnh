@@ -32,14 +32,11 @@ import { useShallow } from 'zustand/shallow';
 
 import {
   DEFAULT_HATCH_AMPS,
-  itemRate,
   useItemNames,
   useProductionStore,
   VOLTAGE_TIERS,
   type EnergyHatch,
   type ProductionNode as IProductionNode,
-  type RecipeItem,
-  type RecipeNodeData,
 } from '@/contexts/productionStore';
 import {
   AVAILABLE_COILS,
@@ -55,7 +52,7 @@ import type {
 import { basePower, overclock, recipeTier } from '@/domain/overclock';
 import { RECIPE_TIERS, TICKS_PER_SECOND } from '@/domain/tiers';
 
-import { formatRate } from '../../common/format';
+import { formatAmount } from '../../common/format';
 import { ProductionNode } from './productionNode';
 
 import classes from './productionNode.module.css';
@@ -314,15 +311,7 @@ const KIND_OPTIONS = [
 // once the name hits that floor does the node itself widen, which is what the
 // body's `fit-content` between `miw` and `maw` expresses.
 const quantityWidth = (quantity: number): number =>
-  Math.min(140, Math.max(60, quantity.toLocaleString().length * 9 + 22));
-
-// what one row of a recipe moves per second, shown beside it in ME mode. the
-// same figure the network ledger sums, so a machine's row and the panel agree
-const Rate = ({ data, item }: { data: RecipeNodeData; item: RecipeItem }) => (
-  <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
-    {formatRate(itemRate(data, item))}/s
-  </Text>
-);
+  Math.min(140, Math.max(60, formatAmount(quantity).length * 9 + 22));
 
 export const RecipeNode = ({
   id,
@@ -348,11 +337,6 @@ export const RecipeNode = ({
       updateRecipe: state.updateRecipe,
     })),
   );
-
-  // on an ME network the throughput is the thing worth reading off a row: every
-  // machine runs continuously, so "enough" is a rate question rather than a
-  // per-batch one
-  const meMode = useProductionStore(state => state.meMode);
 
   const itemNames = useItemNames();
 
@@ -686,15 +670,13 @@ export const RecipeNode = ({
                   id={input.id}
                   position={Position.Left}
                   className={classes['recipe-input']}
-                  data-me={meMode || undefined}
                 />
 
                 <NumberInput
                   size="sm"
                   w={quantityWidth(input.quantity)}
-                  min={1}
+                  min={0}
                   allowNegative={false}
-                  allowDecimal={false}
                   hideControls
                   thousandSeparator=","
                   value={input.quantity}
@@ -720,8 +702,6 @@ export const RecipeNode = ({
                   ref={i === arr.length - 1 ? inputRef : null}
                   onKeyDown={e => e.key === 'Enter' && addInput()}
                 />
-
-                {meMode && <Rate data={data} item={input} />}
 
                 <ActionIcon
                   variant="subtle"
@@ -762,9 +742,8 @@ export const RecipeNode = ({
                 <NumberInput
                   size="sm"
                   w={quantityWidth(output.quantity)}
-                  min={1}
+                  min={0}
                   allowNegative={false}
-                  allowDecimal={false}
                   hideControls
                   thousandSeparator=","
                   value={output.quantity}
@@ -791,8 +770,6 @@ export const RecipeNode = ({
                   onKeyDown={e => e.key === 'Enter' && addOutput()}
                 />
 
-                {meMode && <Rate data={data} item={output} />}
-
                 <ActionIcon
                   variant="subtle"
                   color="gray"
@@ -806,7 +783,6 @@ export const RecipeNode = ({
                   id={output.id}
                   position={Position.Right}
                   className={classes.output}
-                  data-me={meMode || undefined}
                 />
               </Group>
             ))}

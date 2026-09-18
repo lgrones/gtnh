@@ -212,9 +212,9 @@ const react = () => {
   open(activeId);
 };
 
-useProductionLibrary.subscribe(react);
+const unsubscribeLibrary = useProductionLibrary.subscribe(react);
 // re-evaluate on sign-out (active graph clears)
-useAuth.subscribe(() => {
+const unsubscribeAuth = useAuth.subscribe(() => {
   if (!useAuth.getState().user) {
     lastGraphId = null;
     close();
@@ -228,6 +228,20 @@ if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', flushCurrent);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') flushCurrent();
+  });
+}
+
+// A session is a set of live subscriptions and an open Yjs doc, none of which a
+// module reload can see. Without this, every dev-server HMR update through this
+// module's import graph leaves the previous session running: an old binding
+// still holding the old graph's doc, still subscribed to the store, still
+// autosaving — which is how one graph's nodes end up saved over another's.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    unsubscribeLibrary();
+    unsubscribeAuth();
+    window.removeEventListener('pagehide', flushCurrent);
+    teardown();
   });
 }
 

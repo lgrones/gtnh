@@ -1,10 +1,8 @@
-import { Divider, Group, Paper, Select, Stack, Text } from '@mantine/core';
+import { Divider, Group, Select, Stack, Text } from '@mantine/core';
 import {
   IconAlertTriangle,
   IconBolt,
-  IconClock,
   IconFlame,
-  IconRotate,
   IconSettingsBolt,
 } from '@tabler/icons-react';
 import { useMemo } from 'react';
@@ -12,51 +10,25 @@ import { useMemo } from 'react';
 import {
   demandByTier,
   lineEnergy,
-  meLedger,
-  starvation,
   useProductionStore,
 } from '@/contexts/productionStore';
 import { GENERATORS, planBank } from '@/domain/generators';
 
+import { Panel } from '../common/panel';
 import { Stat } from '../common/stat';
 
 // compact integer / small-decimal formatting
 const fmt = (n: number, digits = 0) =>
   n.toLocaleString(undefined, { maximumFractionDigits: digits });
 
-// seconds -> "1h 2m 3s" (drops zero leading units; "0s" when empty)
-const formatDuration = (totalSeconds: number): string => {
-  if (totalSeconds <= 0) return '0s';
-  const rounded = Math.round(totalSeconds);
-  const h = Math.floor(rounded / 3600);
-  const m = Math.floor((rounded % 3600) / 60);
-  const s = rounded % 60;
-  return [h && `${h}h`, m && `${m}m`, s && `${s}s`].filter(Boolean).join(' ');
-};
-
 export const EnergyPanel = () => {
   const nodes = useProductionStore(state => state.nodes);
   const edges = useProductionStore(state => state.edges);
-  const meMode = useProductionStore(state => state.meMode);
+  // only `demand` is read here, and that is a sum over the machines either way
+  // — the timings this panel used to show now live with the rest of the
+  // statistics, per mode: the critical path in Statistics, the chain in ME
+  const { demand } = useMemo(() => lineEnergy(nodes, edges), [nodes, edges]);
 
-  const { demand, time, looped } = useMemo(
-    () => lineEnergy(nodes, edges, meMode),
-    [nodes, edges, meMode],
-  );
-
-  // how far undersupply holds the line below its nominal speed. Only asked in
-  // ME mode: a wired line is balanced on per-pass amounts, which say nothing
-  // about the rates this is solved from
-  const starved = useMemo(
-    () => (meMode ? starvation(nodes) : undefined),
-    [nodes, meMode],
-  );
-
-  // a loop has no critical path, so its products' rates are the useful number
-  const products = useMemo(
-    () => (meMode && looped ? meLedger(nodes).products : []),
-    [nodes, meMode, looped],
-  );
   const byTier = useMemo(() => demandByTier(nodes), [nodes]);
 
   // picker selection lives in the store so it's saved + synced per graph (tier
@@ -77,68 +49,12 @@ export const EnergyPanel = () => {
   const plan = planBank(category, fuel, byTier);
 
   return (
-    <Paper h="100%" p="md" component={Stack} style={{ overflow: 'auto' }}>
-      <Text fw={600}>Energy</Text>
-
+    <Panel title="Energy">
       <Stat
         icon={<IconBolt size={16} color="var(--mantine-color-yellow-filled)" />}
         label="Power demand"
         value={`${fmt(demand, 1)} EU/t`}
       />
-
-      {looped ? (
-        <Stat
-          icon={
-            <IconRotate size={16} color="var(--mantine-color-blue-filled)" />
-          }
-          label="Throughput (the line loops)"
-        >
-          {products.length === 0 ? (
-            <Text c="dimmed">Nothing leaves the network</Text>
-          ) : (
-            products.map(product => (
-              <Text key={product.name}>
-                {fmt(product.net * (starved?.worst ?? 1), 2)}/s {product.name}
-              </Text>
-            ))
-          )}
-        </Stat>
-      ) : (
-        <Stat
-          icon={
-            <IconClock size={16} color="var(--mantine-color-blue-filled)" />
-          }
-          label="Process time (critical path)"
-          value={formatDuration(time)}
-        />
-      )}
-
-      {starved !== undefined && starved.worst < 1 && (
-        <Stat
-          icon={
-            <IconAlertTriangle
-              size={16}
-              color="var(--mantine-color-yellow-filled)"
-            />
-          }
-          label={looped ? 'Held back by' : 'Worst case'}
-        >
-          {!looped && (
-            <Text>
-              {formatDuration(time / starved.worst)}{' '}
-              <Text span c="dimmed">
-                ({fmt(1 / starved.worst, 2)}×)
-              </Text>
-            </Text>
-          )}
-
-          <Text size="sm" c="dimmed">
-            {starved.limiting === undefined
-              ? 'undersupplied inputs'
-              : `${starved.limiting} — the line runs at ${fmt(starved.worst * 100, 0)}% of nominal`}
-          </Text>
-        </Stat>
-      )}
 
       <Divider label="Generator" />
 
@@ -241,6 +157,6 @@ export const EnergyPanel = () => {
           Set EU, time and voltage on recipe nodes to calculate generators
         </Text>
       )}
-    </Paper>
+    </Panel>
   );
 };

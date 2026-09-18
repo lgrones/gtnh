@@ -1,4 +1,4 @@
-import { Group, Paper, Stack, Text } from '@mantine/core';
+import { Group, Text } from '@mantine/core';
 import { IconCircleCheck, IconExclamationCircle } from '@tabler/icons-react';
 import { useMemo } from 'react';
 
@@ -8,30 +8,28 @@ import {
   type GraphIssue,
 } from '@/contexts/productionStore';
 
+import { Panel } from '../common/panel';
+
 export const IssuePanel = () => {
   const nodes = useProductionStore(state => state.nodes);
   const edges = useProductionStore(state => state.edges);
-  const meMode = useProductionStore(state => state.meMode);
 
   // recompute live on every graph edit — validateGraph is cheap, no button
-  const issues = useMemo(
-    () => validateGraph(nodes, edges, meMode),
-    [nodes, edges, meMode],
-  );
+  const issues = useMemo(() => validateGraph(nodes, edges), [nodes, edges]);
 
   return (
-    <Paper h="100%" p="md" component={Stack} style={{ overflow: 'auto' }}>
-      <Group justify="space-between">
-        <Text fw={600}>Issues</Text>
-        {issues.length > 0 && (
+    <Panel
+      title="Issues"
+      action={
+        issues.length > 0 && (
           <Text size="sm" c="dimmed">
             {issues.length}
           </Text>
-        )}
-      </Group>
-
+        )
+      }
+    >
       <Validation issues={issues} />
-    </Paper>
+    </Panel>
   );
 };
 
@@ -65,10 +63,6 @@ const issueLabel = (issue: GraphIssue): string => {
       return 'charged for but bought no time';
     case 'unmodeled':
       return 'not in the machine catalog, values used as entered';
-    case 'similar':
-      // the ledger groups on the item name, so a second spelling reads as a
-      // shortage of one item and a surplus of another, neither of them real
-      return 'one spelling is likely a typo of the other, splitting the ledger';
   }
 };
 

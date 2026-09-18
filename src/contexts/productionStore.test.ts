@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { overclock } from '@/domain/overclock';
 
 import {
+  captureLine,
   itemPerPass,
   itemRate,
   layoutNodes,
@@ -11,26 +12,24 @@ import {
   machineAmps,
   machineTier,
   normalizeNodes,
-  lineFlow,
   lineMetrics,
-  meLedger,
-  starvation,
   demandByTier,
   recipePower,
   useProductionStore,
   validateGraph,
-  type LedgerEntry,
+  type LineCapture,
+  type HandleOffsets,
+  type PlaceableNodeType,
   type RecipeNodeData,
   type SinkNodeData,
   type ProductionNode,
-  type ProductionNodeType,
 } from './productionStore';
 
 const store = useProductionStore;
 const state = () => store.getState();
 
 // add a node and return its generated id
-const addNode = (type: ProductionNodeType, x = 0, y = 0) => {
+const addNode = (type: PlaceableNodeType, x = 0, y = 0) => {
   state().addNode(type, { x, y });
   const nodes = state().nodes;
   return nodes[nodes.length - 1]!.id;
@@ -60,7 +59,7 @@ const completeRecipe = (recipe: string) =>
 
 beforeEach(() => {
   vi.useFakeTimers();
-  store.setState({ nodes: [], edges: [], generator: null, meMode: false });
+  store.setState({ nodes: [], edges: [], generator: null });
   vi.runAllTimers();
 });
 
@@ -287,7 +286,7 @@ describe('onReconnect', () => {
       targetHandle: null,
     });
     // a second edge out2 -> different sink, then reconnect it onto the busy sink
-    const sink2 = addNode('disposalNode');
+    const sink2 = addNode('byproductNode');
     state().onConnect({
       source: recipe,
       target: sink2,
@@ -312,7 +311,7 @@ describe('onReconnect', () => {
 
 describe('mirror sync — recipe output -> sink', () => {
   // wire a recipe output handle to a sink node
-  const wire = (sinkType: ProductionNodeType) => {
+  const wire = (sinkType: PlaceableNodeType) => {
     const recipe = addNode('recipeNode');
     const outputId = addOutput(recipe);
     state().updateRecipeOutput(recipe, outputId, {
@@ -335,8 +334,8 @@ describe('mirror sync — recipe output -> sink', () => {
     expect(data).toMatchObject({ name: 'Iron Plate', quantity: 4 });
   });
 
-  it('mirrors onto a disposal node on connect too', () => {
-    const { sink } = wire('disposalNode');
+  it('mirrors onto a byproduct node on connect too', () => {
+    const { sink } = wire('byproductNode');
     const data = state().nodes.find(n => n.id === sink)!.data as SinkNodeData;
     expect(data).toMatchObject({ name: 'Iron Plate', quantity: 4 });
   });
@@ -860,6 +859,88 @@ describe('validateGraph — renamed recipe link', () => {
   });
 });
 
+describe('fractional quantities', () => {
+  // a machine that only produces something some of the time is written as the
+  // average — an 80% chance is 0.8 per run — so the balance check has to hold up
+  // under the float arithmetic that follows from it
+  it('is clean when a fractional supply exactly covers the demand', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Slag', quantity: 0.8 });
+    state().updateRecipe(a, { multiplier: 3 });
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Slag', quantity: 2.4 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+    completeRecipe(a);
+    completeRecipe(b);
+
+    // the premise: three runs of 0.8 is not 2.4 in binary floating point, so an
+    // exact comparison reports this line as both short and over at once
+    expect(itemPerPass(recipeData(a), recipeData(a).outputs[0]!)).not.toBe(2.4);
+    expect(validateGraph(state().nodes, state().edges)).toEqual([]);
+  });
+
+  it('still reports a genuine fractional shortfall', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Slag', quantity: 0.05 });
+    const b = addNode('recipeNode');
+    state().renameNode(b, 'Receiver');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Slag', quantity: 0.2 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+
+    expect(validateGraph(state().nodes, state().edges)).toContainEqual(
+      expect.objectContaining({
+        kind: 'deficit',
+        recipe: 'Receiver',
+        item: 'Slag',
+        demand: 0.2,
+        supply: 0.05,
+      }),
+    );
+  });
+
+  it('mirrors a fractional leftover onto the sink', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Slag', quantity: 0.8 });
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Slag', quantity: 0.5 });
+    const sink = addNode('byproductNode');
+
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+    state().onConnect({
+      source: a,
+      target: sink,
+      sourceHandle: outId,
+      targetHandle: null,
+    });
+
+    const quantity = (
+      state().nodes.find(n => n.id === sink)!.data as SinkNodeData
+    ).quantity;
+    expect(quantity).toBeCloseTo(0.3, 10);
+  });
+});
+
 describe('recipe multiplier', () => {
   const leafData = (id: string) =>
     state().nodes.find(n => n.id === id)!.data as SinkNodeData;
@@ -938,7 +1019,7 @@ describe('recipe multiplier', () => {
     const a = addNode('recipeNode');
     const outId = addOutput(a);
     state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 4 });
-    const sink = addNode('disposalNode');
+    const sink = addNode('byproductNode');
     state().onConnect({
       source: a,
       target: sink,
@@ -1062,8 +1143,170 @@ describe('layoutNodes', () => {
 
     const laid = await layoutNodes(state().nodes, state().edges);
 
-    const pos = (id: string) => laid.find(n => n.id === id)!.position;
+    const pos = (id: string) => laid.nodes.find(n => n.id === id)!.position;
     expect(pos(a).x).toBeLessThan(pos(b).x);
+  });
+
+  it('routes an edge around a node standing in its way', async () => {
+    vi.useRealTimers();
+    const a = addNode('recipeNode', 0, 0);
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 1 });
+    const b = addNode('recipeNode', 0, 0);
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 1 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+    // a second output on the producer, feeding a consumer two layers along, so
+    // its edge has to get past the first consumer
+    const farOut = addOutput(a);
+    state().updateRecipeOutput(a, farOut, { name: 'Dust', quantity: 1 });
+    const c = addNode('recipeNode', 0, 0);
+    const cIn = addInput(c);
+    state().updateRecipeInput(c, cIn, { name: 'Dust', quantity: 1 });
+    const cOut = addOutput(c);
+    state().updateRecipeOutput(c, cOut, { name: 'Plate', quantity: 1 });
+    const d = addNode('recipeNode', 0, 0);
+    const dIn = addInput(d);
+    state().updateRecipeInput(d, dIn, { name: 'Plate', quantity: 1 });
+    state().onConnect({
+      source: a,
+      target: c,
+      sourceHandle: farOut,
+      targetHandle: cIn,
+    });
+    state().onConnect({
+      source: c,
+      target: d,
+      sourceHandle: cOut,
+      targetHandle: dIn,
+    });
+
+    const laid = await layoutNodes(state().nodes, state().edges);
+
+    // every edge comes back with ELK's routing attached, and the bends are
+    // orthogonal: consecutive points share an x or a y
+    const bent = laid.edges.filter(edge => {
+      const points = (edge.data as { points?: { x: number; y: number }[] })
+        .points;
+      return points !== undefined && points.length > 0;
+    });
+    expect(bent.length).toBeGreaterThan(0);
+    for (const edge of bent) {
+      const points = (edge.data as { points: { x: number; y: number }[] })
+        .points;
+      for (let i = 1; i < points.length; i++) {
+        const prev = points[i - 1]!;
+        const next = points[i]!;
+        expect(prev.x === next.x || prev.y === next.y).toBe(true);
+      }
+    }
+  });
+
+  it('routes each sub-line from its own port when two ship the same item', async () => {
+    vi.useRealTimers();
+    // a sub-line's ports are named after the items they carry, so two lines
+    // that both hand over Hydrogen offer the SAME handle id. ELK resolves a
+    // port id across the whole graph, so unless the ids are namespaced per
+    // node both edges leave from one line — and get drawn from a machine that
+    // has nothing to do with them
+    const shipping = (item: string): LineCapture => ({
+      inputs: [],
+      outputs: [{ id: item, name: item, quantity: 1 }],
+      byproducts: [],
+      machines: [],
+      tiers: [],
+      demand: 0,
+      time: 0,
+      incomplete: 0,
+    });
+
+    state().addLineNode('one', 'One', shipping('hydrogen'), { x: 0, y: 0 });
+    state().addLineNode('two', 'Two', shipping('hydrogen'), { x: 0, y: 0 });
+    const [one, two] = state().nodes.map(node => node.id) as [string, string];
+
+    const consumers = [one, two].map(line => {
+      const recipe = addNode('recipeNode');
+      const handle = addInput(recipe);
+      state().updateRecipeInput(recipe, handle, {
+        name: 'hydrogen',
+        quantity: 1,
+      });
+      state().onConnect({
+        source: line,
+        target: recipe,
+        sourceHandle: 'hydrogen',
+        targetHandle: handle,
+      });
+      return { recipe, handle };
+    });
+
+    // pin every handle where the DOM would put it, so ELK's routes can be
+    // checked against the points React Flow actually draws the edge between
+    const HANDLE_Y = 80;
+    const offsets: HandleOffsets = new Map([
+      [one, new Map([['hydrogen', { x: 400, y: HANDLE_Y }]])],
+      [two, new Map([['hydrogen', { x: 400, y: HANDLE_Y }]])],
+      ...consumers.map(
+        ({ recipe, handle }) =>
+          [recipe, new Map([[handle, { x: 0, y: HANDLE_Y }]])] as const,
+      ),
+    ]);
+
+    const laid = await layoutNodes(state().nodes, state().edges, offsets);
+    const at = (nodeId: string, handle: string) => {
+      const node = laid.nodes.find(n => n.id === nodeId)!;
+      const offset = offsets.get(nodeId)!.get(handle)!;
+      return { x: node.position.x + offset.x, y: node.position.y + offset.y };
+    };
+
+    for (const edge of laid.edges) {
+      const points = (edge.data as { points?: { x: number; y: number }[] })
+        .points;
+      const chain = [
+        at(edge.source, edge.sourceHandle!),
+        ...(points ?? []),
+        at(edge.target, edge.targetHandle!),
+      ];
+      // an edge routed from the wrong node arrives as a diagonal: every
+      // segment of a route ELK owns end to end shares an x or a y
+      for (let i = 1; i < chain.length; i++) {
+        const prev = chain[i - 1]!;
+        const next = chain[i]!;
+        expect(
+          Math.abs(prev.x - next.x) < 0.5 || Math.abs(prev.y - next.y) < 0.5,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it('clears stale waypoints from an edge it routes straight', async () => {
+    vi.useRealTimers();
+    const a = addNode('recipeNode', 0, 0);
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 1 });
+    const b = addNode('recipeNode', 0, 0);
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 1 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+    const edgeId = state().edges[0]!.id;
+    state().setEdgePoints(edgeId, [{ x: 999, y: 999 }]);
+
+    const laid = await layoutNodes(state().nodes, state().edges);
+
+    const points = (
+      laid.edges[0]!.data as { points?: { x: number; y: number }[] }
+    ).points;
+    expect(points?.some(p => p.x === 999)).not.toBe(true);
   });
 });
 
@@ -1284,7 +1527,7 @@ describe('setGenerator', () => {
 });
 
 describe('lineMetrics', () => {
-  // input leaf -> recipe -> output sink, plus a byproduct -> disposal sink.
+  // input leaf -> recipe -> output sink, plus a byproduct -> byproduct sink.
   // recipe runs 3× (multiplier) at MV, 5s, 120 EU per run.
   const buildLine = () => {
     const recipe = addNode('recipeNode');
@@ -1316,10 +1559,10 @@ describe('lineMetrics', () => {
       sourceHandle: plateId,
       targetHandle: null,
     });
-    const disposal = addNode('disposalNode');
+    const byproduct = addNode('byproductNode');
     state().onConnect({
       source: recipe,
-      target: disposal,
+      target: byproduct,
       sourceHandle: slagId,
       targetHandle: null,
     });
@@ -1333,7 +1576,7 @@ describe('lineMetrics', () => {
 
     expect(metrics.inputs).toEqual([{ name: 'Ore', quantity: 6 }]);
     expect(metrics.outputs).toEqual([{ name: 'Plate', quantity: 12 }]);
-    expect(metrics.disposals).toEqual([{ name: 'Slag', quantity: 3 }]);
+    expect(metrics.byproducts).toEqual([{ name: 'Slag', quantity: 3 }]);
   });
 
   it('lists machines with their voltage tier', () => {
@@ -1355,10 +1598,11 @@ describe('lineMetrics', () => {
     expect(lineMetrics([], [])).toEqual({
       inputs: [],
       outputs: [],
-      disposals: [],
+      byproducts: [],
       machines: [],
       time: 0,
       demand: 0,
+      incomplete: 0,
     });
   });
 });
@@ -1688,6 +1932,20 @@ describe('normalizeNodes — persisted graphs', () => {
 
     expect(normalizeNodes([current])[0]).toBe(current);
   });
+
+  it('carries a disposal node saved under the old name over to a byproduct one', () => {
+    const [node] = normalizeNodes([
+      {
+        id: 'n1',
+        position: { x: 0, y: 0 },
+        type: 'disposalNode',
+        data: { name: 'Slag', quantity: 3 },
+      } as unknown as ProductionNode,
+    ]);
+
+    expect(node!.type).toBe('byproductNode');
+    expect(node!.data).toEqual({ name: 'Slag', quantity: 3 });
+  });
 });
 
 describe('itemRate', () => {
@@ -1721,565 +1979,397 @@ describe('itemRate', () => {
   });
 });
 
-describe('meLedger', () => {
-  // A makes Ore; B turns Ore + Sulfur Dust into Plate. Both recipes carry the
-  // same power and duration, so their rates are directly comparable. The second
-  // input is deliberately NOT water — water is freely available, which is its
-  // own case below
-  const chain = () => {
+describe('lineMetrics — unfilled recipes', () => {
+  it('counts the recipes whose EU or duration the figures are missing', () => {
     const a = addNode('recipeNode');
-    const ore = addOutput(a);
-    state().updateRecipeOutput(a, ore, { name: 'Ore', quantity: 8 });
     completeRecipe(a);
 
-    const b = addNode('recipeNode');
-    const oreIn = addInput(b);
-    state().updateRecipeInput(b, oreIn, { name: 'Ore', quantity: 8 });
-    const sulfurIn = addInput(b);
-    state().updateRecipeInput(b, sulfurIn, {
-      name: 'Sulfur Dust',
-      quantity: 2,
-    });
-    const plate = addOutput(b);
-    state().updateRecipeOutput(b, plate, { name: 'Plate', quantity: 4 });
-    completeRecipe(b);
+    const noEu = addNode('recipeNode');
+    state().updateRecipe(noEu, { eu: 0, time: 5 });
 
-    return { a, b, ore, oreIn };
-  };
+    const noTime = addNode('recipeNode');
+    state().updateRecipe(noTime, { eu: 30, time: 0 });
 
-  const names = (entries: LedgerEntry[]) => entries.map(entry => entry.name);
+    const metrics = lineMetrics(state().nodes, state().edges);
 
-  it('nets an intermediate out with nothing wired at all', () => {
-    chain();
-    const ledger = meLedger(state().nodes);
-
-    // the whole point: only Sulfur Dust has to be put into the network, and Ore —
-    // which the line makes for itself — is not mistaken for something you buy
-    expect(names(ledger.required)).toEqual(['Sulfur Dust']);
-    expect(names(ledger.products)).toEqual(['Plate']);
-    expect(names(ledger.balanced)).toEqual(['Ore']);
+    expect(metrics.incomplete).toBe(2);
+    // the finished recipe still contributes, so the 0s are a HOLE in the
+    // figures rather than the whole of them — which is what the comparison
+    // needs in order to refuse to rank them
+    expect(metrics.demand).toBeGreaterThan(0);
   });
 
-  it('is unchanged by wiring an item up as a direct pipe', () => {
-    const { a, b, ore, oreIn } = chain();
-    const before = meLedger(state().nodes);
-
-    state().onConnect({
-      source: a,
-      target: b,
-      sourceHandle: ore,
-      targetHandle: oreIn,
-    });
-
-    // an input bus does not care where an item came from, so drawing a pipe
-    // between two machines is a note about routing and nothing more. The ledger
-    // never sees the edges, which is what makes this structural
-    expect(meLedger(state().nodes)).toEqual(before);
-  });
-
-  it('calls an item the line makes too slowly undersized, not missing', () => {
-    const { a, ore } = chain();
-    state().updateRecipeOutput(a, ore, { quantity: 5 });
-
-    const ledger = meLedger(state().nodes);
-
-    // 5 made against 8 drawn. The line DOES make Ore, so this is a producer
-    // that cannot keep up — telling someone to go and source their own
-    // intermediate is how a loop reads as a shopping list for itself
-    expect(names(ledger.required)).not.toContain('Ore');
-    const undersized = ledger.short.find(entry => entry.name === 'Ore');
-    expect(undersized?.net).toBeLessThan(0);
-
-    // and both halves stay legible rather than being netted into one number
-    expect(undersized!.produced).toBeGreaterThan(0);
-    expect(undersized!.consumed).toBeGreaterThan(undersized!.produced);
-
-    expect(validateGraph(state().nodes, state().edges, true)).toEqual([]);
-  });
-
-  it('groups spellings that differ only in case and spacing', () => {
+  it('is clean for a line with every field filled in', () => {
     const a = addNode('recipeNode');
-    const outId = addOutput(a);
-    state().updateRecipeOutput(a, outId, { name: 'Iron  Ore', quantity: 8 });
     completeRecipe(a);
 
-    const b = addNode('recipeNode');
-    const inId = addInput(b);
-    state().updateRecipeInput(b, inId, { name: 'iron ore', quantity: 8 });
-    completeRecipe(b);
-
-    const ledger = meLedger(state().nodes);
-
-    // one item, kept under the first spelling seen
-    expect(names(ledger.balanced)).toEqual(['Iron  Ore']);
-    expect(ledger.required).toEqual([]);
-  });
-
-  it('ignores half-typed rows with no item name', () => {
-    const a = addNode('recipeNode');
-    addOutput(a);
-    completeRecipe(a);
-
-    expect(meLedger(state().nodes)).toEqual({
-      required: [],
-      short: [],
-      covered: [],
-      products: [],
-      balanced: [],
-    });
+    expect(lineMetrics(state().nodes, state().edges).incomplete).toBe(0);
   });
 });
 
-describe('validateGraph — ME mode', () => {
-  it('stops reporting unfed inputs and unabsorbed outputs', () => {
-    const a = addNode('recipeNode');
-    const outId = addOutput(a);
-    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 5 });
-    const inId = addInput(a);
-    state().updateRecipeInput(a, inId, { name: 'Dust', quantity: 2 });
-    completeRecipe(a);
+// ---------------------------------------------------------------------------
+// sub-line nodes: a whole saved line collapsed into one
+// ---------------------------------------------------------------------------
 
-    // wired mode calls both of these a problem; on an ME network they are the
-    // normal case, and the ledger answers the balance question instead
-    expect(validateGraph(state().nodes, state().edges)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ kind: 'surplus' }),
-        expect.objectContaining({ kind: 'unfed' }),
-      ]),
-    );
-    expect(validateGraph(state().nodes, state().edges, true)).toEqual([]);
+// a capture with every field present, so a test only spells out what it is about
+const capture = (partial: Partial<LineCapture> = {}): LineCapture => ({
+  inputs: [],
+  outputs: [],
+  byproducts: [],
+  machines: [],
+  tiers: [],
+  demand: 0,
+  time: 0,
+  incomplete: 0,
+  ...partial,
+});
+
+// drop a collapsed sub-line on the canvas and return its node id
+const addLine = (source: LineCapture, name = 'Sub-line') => {
+  state().addLineNode('graph-1', name, source, { x: 0, y: 0 });
+  const nodes = state().nodes;
+  return nodes[nodes.length - 1]!.id;
+};
+
+describe('captureLine', () => {
+  // a one-recipe line: 2 ore in, 1 plate + 1 slag out, fed and drained by leaves
+  const buildSource = () => {
+    const recipe = addNode('recipeNode');
+    state().updateRecipe(recipe, { machine: 'Macerator', eu: 30, time: 4 });
+
+    const ore = addInput(recipe);
+    state().updateRecipeInput(recipe, ore, { name: 'Ore', quantity: 2 });
+    const plate = addOutput(recipe);
+    state().updateRecipeOutput(recipe, plate, { name: 'Plate', quantity: 1 });
+    const slag = addOutput(recipe);
+    state().updateRecipeOutput(recipe, slag, { name: 'Slag', quantity: 1 });
+
+    const feed = addNode('inputNode');
+    state().onConnect({
+      source: feed,
+      target: recipe,
+      sourceHandle: null,
+      targetHandle: ore,
+    });
+
+    const product = addNode('outputNode');
+    state().onConnect({
+      source: recipe,
+      target: product,
+      sourceHandle: plate,
+      targetHandle: null,
+    });
+
+    const waste = addNode('byproductNode');
+    state().onConnect({
+      source: recipe,
+      target: waste,
+      sourceHandle: slag,
+      targetHandle: null,
+    });
+
+    return { recipe };
+  };
+
+  it("reads the line's leaves as its ports", () => {
+    buildSource();
+    const read = captureLine(state().nodes, state().edges);
+
+    expect(read.inputs).toEqual([{ id: 'ore', name: 'Ore', quantity: 2 }]);
+    expect(read.outputs).toEqual([{ id: 'plate', name: 'Plate', quantity: 1 }]);
+    expect(read.byproducts).toEqual([
+      { id: 'slag', name: 'Slag', quantity: 1 },
+    ]);
   });
 
-  it('still reports missing recipe fields', () => {
+  it('carries the machines, the draw and the critical path', () => {
+    buildSource();
+    const read = captureLine(state().nodes, state().edges);
+
+    expect(read.machines).toEqual([
+      { machine: 'Macerator', quantity: 1, voltage: 'LV' },
+    ]);
+    expect(read.time).toBe(4);
+    expect(read.demand).toBeGreaterThan(0);
+    expect(read.tiers).toEqual([{ tier: 'LV', power: read.demand, amps: 1 }]);
+    expect(read.incomplete).toBe(0);
+  });
+
+  it('merges two leaves of the same item into one port', () => {
+    const recipe = addNode('recipeNode');
+    completeRecipe(recipe);
+
+    for (const quantity of [2, 3]) {
+      const input = addInput(recipe);
+      state().updateRecipeInput(recipe, input, { name: 'Ore', quantity });
+      const feed = addNode('inputNode');
+      state().onConnect({
+        source: feed,
+        target: recipe,
+        sourceHandle: null,
+        targetHandle: input,
+      });
+    }
+
+    expect(captureLine(state().nodes, state().edges).inputs).toEqual([
+      { id: 'ore', name: 'Ore', quantity: 5 },
+    ]);
+  });
+
+  it('offers no port for a leaf that is wired to nothing', () => {
+    addNode('inputNode');
+    addNode('outputNode');
+
+    const read = captureLine(state().nodes, state().edges);
+    expect(read.inputs).toEqual([]);
+    expect(read.outputs).toEqual([]);
+  });
+
+  it('counts a recipe with no EU or duration as a hole in the reading', () => {
     addNode('recipeNode');
-
-    // recipe DATA problems are orthogonal to how the line is fed
-    expect(validateGraph(state().nodes, state().edges, true)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ kind: 'incomplete', item: 'energy (EU)' }),
-        expect.objectContaining({ kind: 'incomplete', item: 'duration' }),
-      ]),
-    );
+    expect(captureLine(state().nodes, state().edges).incomplete).toBe(1);
   });
+});
 
-  it('still reports a direct pipe whose two item names disagree', () => {
-    const a = addNode('recipeNode');
-    const outId = addOutput(a);
-    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 4 });
-    const b = addNode('recipeNode');
-    const inId = addInput(b);
-    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 4 });
+describe('sub-line nodes — balance', () => {
+  it('feeds a downstream recipe from a sub-line port', () => {
+    const line = addLine(
+      capture({ outputs: [{ id: 'plate', name: 'Plate', quantity: 4 }] }),
+    );
+
+    const recipe = addNode('recipeNode');
+    completeRecipe(recipe);
+    const input = addInput(recipe);
+    state().updateRecipeInput(recipe, input, { name: 'Plate', quantity: 4 });
+
     state().onConnect({
-      source: a,
-      target: b,
-      sourceHandle: outId,
-      targetHandle: inId,
+      source: line,
+      target: recipe,
+      sourceHandle: 'plate',
+      targetHandle: input,
     });
-    state().updateRecipeInput(b, inId, { name: 'Dust' });
 
-    expect(validateGraph(state().nodes, state().edges, true)).toContainEqual(
-      expect.objectContaining({ kind: 'mismatch' }),
+    expect(state().edges).toHaveLength(1);
+    expect(
+      validateGraph(state().nodes, state().edges).filter(
+        issue => issue.kind === 'deficit' || issue.kind === 'surplus',
+      ),
+    ).toEqual([]);
+  });
+
+  it('reports a deficit when the sub-line makes less than is asked of it', () => {
+    const line = addLine(
+      capture({ outputs: [{ id: 'plate', name: 'Plate', quantity: 1 }] }),
     );
+
+    const recipe = addNode('recipeNode');
+    completeRecipe(recipe);
+    state().renameNode(recipe, 'Assembler');
+    const input = addInput(recipe);
+    state().updateRecipeInput(recipe, input, { name: 'Plate', quantity: 4 });
+
+    state().onConnect({
+      source: line,
+      target: recipe,
+      sourceHandle: 'plate',
+      targetHandle: input,
+    });
+
+    expect(
+      validateGraph(state().nodes, state().edges).find(
+        issue => issue.kind === 'deficit',
+      ),
+    ).toMatchObject({ recipe: 'Assembler', supply: 1, demand: 4 });
+  });
+
+  it('reports an unfed sub-line input', () => {
+    addLine(
+      capture({ inputs: [{ id: 'ore', name: 'Ore', quantity: 2 }] }),
+      'Ore washing',
+    );
+
+    expect(
+      validateGraph(state().nodes, state().edges).find(
+        issue => issue.kind === 'unfed',
+      ),
+    ).toMatchObject({ recipe: 'Ore washing', item: 'Ore' });
+  });
+
+  it('mirrors a scaled port onto a connected output leaf', () => {
+    const line = addLine(
+      capture({ outputs: [{ id: 'plate', name: 'Plate', quantity: 3 }] }),
+    );
+    state().setLineMultiplier(line, 4);
+
+    const sink = addNode('outputNode');
+    state().onConnect({
+      source: line,
+      target: sink,
+      sourceHandle: 'plate',
+      targetHandle: null,
+    });
+
+    const data = state().nodes.find(n => n.id === sink)!.data as SinkNodeData;
+    expect(data).toMatchObject({ name: 'Plate', quantity: 12 });
+  });
+
+  it('re-reads the mirrors when the copy count changes', () => {
+    const line = addLine(
+      capture({ outputs: [{ id: 'plate', name: 'Plate', quantity: 3 }] }),
+    );
+    const sink = addNode('outputNode');
+    state().onConnect({
+      source: line,
+      target: sink,
+      sourceHandle: 'plate',
+      targetHandle: null,
+    });
+
+    state().setLineMultiplier(line, 2);
+    const data = state().nodes.find(n => n.id === sink)!.data as SinkNodeData;
+    expect(data.quantity).toBe(6);
+  });
+
+  it('refuses half a production line', () => {
+    const line = addLine(capture());
+    state().setLineMultiplier(line, 0.5);
+    const node = state().nodes.find(n => n.id === line)!;
+    expect(node.type === 'lineNode' && node.data.multiplier).toBe(1);
   });
 });
 
-describe('lineMetrics — ME mode', () => {
-  it('takes its inputs and outputs from the ledger, not the leaves', () => {
-    const a = addNode('recipeNode');
-    const ore = addOutput(a);
-    state().updateRecipeOutput(a, ore, { name: 'Ore', quantity: 8 });
-    const sulfur = addInput(a);
-    state().updateRecipeInput(a, sulfur, { name: 'Sulfur Dust', quantity: 2 });
-    completeRecipe(a);
+describe('sub-line nodes — cost', () => {
+  const powered = capture({
+    machines: [
+      { machine: 'Macerator', quantity: 2, voltage: 'LV' },
+      { machine: 'Electric Blast Furnace', quantity: 1, voltage: 'HV' },
+    ],
+    tiers: [
+      { tier: 'LV', power: 30, amps: 1 },
+      { tier: 'HV', power: 480, amps: 2 },
+    ],
+    demand: 510,
+    time: 12,
+  });
 
-    // a leaf left over from before the switch must not be counted twice
-    const stray = addNode('outputNode');
-    state().renameNode(stray, 'Stale');
+  it("adds the sub-line's machines to the line's own tally, once", () => {
+    const line = addLine(powered);
+    // cycles are passes of the same machines, not more of them
+    state().setLineMultiplier(line, 3);
 
-    const wired = lineMetrics(state().nodes, state().edges);
-    const me = lineMetrics(state().nodes, state().edges, true);
+    const recipe = addNode('recipeNode');
+    completeRecipe(recipe);
+    state().updateRecipe(recipe, { machine: 'Macerator' });
 
-    expect(wired.outputs).toContainEqual(
-      expect.objectContaining({ name: 'Stale' }),
+    const { machines } = lineMetrics(state().nodes, state().edges);
+
+    expect(machines).toContainEqual({
+      machine: 'Macerator',
+      quantity: 3, // the sub-line's 2, plus the one on the canvas
+      voltage: 'LV',
+    });
+    expect(machines).toContainEqual({
+      machine: 'Electric Blast Furnace',
+      quantity: 1,
+      voltage: 'HV',
+    });
+  });
+
+  it('charges the peak draw once and puts the cycles on the clock', () => {
+    const line = addLine(powered);
+    state().setLineMultiplier(line, 3);
+
+    const energy = lineEnergy(state().nodes, state().edges);
+    // the same machines, run three times over: same peak, three times as long
+    expect(energy.demand).toBe(510);
+    expect(energy.time).toBe(36);
+  });
+
+  it('splits the draw into the tiers it was captured in', () => {
+    const line = addLine(powered);
+    state().setLineMultiplier(line, 2);
+
+    // a second cycle runs the same machines again — the draw is unchanged
+    const byTier = demandByTier(state().nodes);
+    expect(byTier.get('LV')).toEqual({ power: 30, amps: 1 });
+    expect(byTier.get('HV')).toEqual({ power: 480, amps: 2 });
+  });
+
+  it("carries the source line's unfilled recipes up as an issue", () => {
+    addLine(capture({ incomplete: 2 }), 'Rubber');
+
+    expect(
+      validateGraph(state().nodes, state().edges).find(
+        issue => issue.kind === 'incomplete',
+      ),
+    ).toMatchObject({ recipe: 'Rubber' });
+  });
+});
+
+describe('refreshLineNode', () => {
+  const wired = () => {
+    const line = addLine(
+      capture({
+        outputs: [
+          { id: 'plate', name: 'Plate', quantity: 1 },
+          { id: 'rod', name: 'Rod', quantity: 1 },
+        ],
+      }),
     );
-    expect(me.outputs).toEqual([
-      { name: 'Ore', quantity: 8 * overclock(recipeData(a)).parallels },
+
+    for (const handle of ['plate', 'rod']) {
+      const sink = addNode('outputNode');
+      state().onConnect({
+        source: line,
+        target: sink,
+        sourceHandle: handle,
+        targetHandle: null,
+      });
+    }
+
+    return line;
+  };
+
+  it('adopts the new reading', () => {
+    const line = wired();
+    state().refreshLineNode(
+      line,
+      'Renamed',
+      capture({ outputs: [{ id: 'plate', name: 'Plate', quantity: 9 }] }),
+    );
+
+    const node = state().nodes.find(n => n.id === line)!;
+    expect(node.type === 'lineNode' && node.data.name).toBe('Renamed');
+    expect(node.type === 'lineNode' && node.data.capture.outputs).toEqual([
+      { id: 'plate', name: 'Plate', quantity: 9 },
     ]);
-    expect(me.inputs).toEqual([
-      { name: 'Sulfur Dust', quantity: 2 * overclock(recipeData(a)).parallels },
-    ]);
-    expect(me.disposals).toEqual([]);
-
-    // the machine tally and the power figures are model-independent
-    expect(me.machines).toEqual(wired.machines);
-    expect(me.demand).toBe(wired.demand);
   });
-});
 
-describe('validateGraph — split item names', () => {
-  // A makes "Steel Ingot", B eats "Steel Ingots". One item, two spellings, so
-  // the ledger reports a shortage AND a surplus that both exist only on paper
-  const split = (made: string, eaten: string) => {
-    const a = addNode('recipeNode');
-    const outId = addOutput(a);
-    state().updateRecipeOutput(a, outId, { name: made, quantity: 8 });
-    completeRecipe(a);
+  it('keeps the edges of ports that survived and drops the rest', () => {
+    const line = wired();
+    expect(state().edges).toHaveLength(2);
 
-    const b = addNode('recipeNode');
-    const inId = addInput(b);
-    state().updateRecipeInput(b, inId, { name: eaten, quantity: 8 });
-    completeRecipe(b);
-  };
-
-  it('flags a shortage and a surplus a typo apart', () => {
-    split('Steel Ingot', 'Steel Ingots');
-
-    expect(validateGraph(state().nodes, state().edges, true)).toContainEqual(
-      expect.objectContaining({ kind: 'similar' }),
+    state().refreshLineNode(
+      line,
+      'Sub-line',
+      capture({ outputs: [{ id: 'plate', name: 'Plate', quantity: 1 }] }),
     );
+
+    expect(state().edges).toHaveLength(1);
+    expect(state().edges[0]!.sourceHandle).toBe('plate');
   });
 
-  it('leaves genuinely different items alone', () => {
-    split('Steel Ingot', 'Copper Ingot');
-
-    expect(validateGraph(state().nodes, state().edges, true)).toEqual([]);
-  });
-
-  it('says nothing when the near-identical pair both balance', () => {
-    // both spellings are made AND eaten, so nothing split — two real items
-    const a = addNode('recipeNode');
-    const outA = addOutput(a);
-    state().updateRecipeOutput(a, outA, { name: 'Tin Plate', quantity: 4 });
-    const inA = addInput(a);
-    state().updateRecipeInput(a, inA, { name: 'Tin Plates', quantity: 4 });
-    completeRecipe(a);
-
-    const b = addNode('recipeNode');
-    const outB = addOutput(b);
-    state().updateRecipeOutput(b, outB, { name: 'Tin Plates', quantity: 4 });
-    const inB = addInput(b);
-    state().updateRecipeInput(b, inB, { name: 'Tin Plate', quantity: 4 });
-    completeRecipe(b);
-
-    expect(validateGraph(state().nodes, state().edges, true)).toEqual([]);
-  });
-
-  it('stays quiet in wired mode, where the ledger does not apply', () => {
-    split('Steel Ingot', 'Steel Ingots');
-
-    expect(validateGraph(state().nodes, state().edges)).not.toContainEqual(
-      expect.objectContaining({ kind: 'similar' }),
+  it('re-reads the mirrors off the new amounts', () => {
+    const line = wired();
+    state().refreshLineNode(
+      line,
+      'Sub-line',
+      capture({ outputs: [{ id: 'plate', name: 'Plate', quantity: 7 }] }),
     );
-  });
-});
 
-describe('meLedger — storage and freely available items', () => {
-  // one machine turning Sulfur Dust + Water into Plate. Nothing makes either
-  // input, so both start out as work to go and do
-  const consumer = () => {
-    const a = addNode('recipeNode');
-    const sulfur = addInput(a);
-    state().updateRecipeInput(a, sulfur, { name: 'Sulfur Dust', quantity: 4 });
-    const water = addInput(a);
-    state().updateRecipeInput(a, water, { name: 'Water', quantity: 1000 });
-    const plate = addOutput(a);
-    state().updateRecipeOutput(a, plate, { name: 'Plate', quantity: 1 });
-    completeRecipe(a);
-    return a;
-  };
-
-  const storage = (items: { name: string; rate?: number }[]) => {
-    const id = addNode('storageNode');
-    for (const item of items) {
-      state().addStorageItem(id);
-      const stored = (
-        state().nodes.find(n => n.id === id)!.data as {
-          items: { id: string }[];
-        }
-      ).items;
-      const last = stored[stored.length - 1]!.id;
-      state().updateStorageItem(id, last, item);
-    }
-    return id;
-  };
-
-  const find = (entries: LedgerEntry[], name: string) =>
-    entries.find(entry => entry.name === name);
-
-  it('never counts water as something to go and supply', () => {
-    consumer();
-    const ledger = meLedger(state().nodes);
-
-    // GTNH water is unlimited, so it is reported but never chased
-    expect(find(ledger.required, 'Water')).toBeUndefined();
-    expect(find(ledger.covered, 'Water')?.coveredBy).toBe('free');
-    expect(find(ledger.required, 'Sulfur Dust')).toBeDefined();
-  });
-
-  it('covers an item declared on hand, with no rate meaning unlimited', () => {
-    consumer();
-    storage([{ name: 'Sulfur Dust' }]);
-
-    const ledger = meLedger(state().nodes);
-    expect(find(ledger.required, 'Sulfur Dust')).toBeUndefined();
-    expect(find(ledger.covered, 'Sulfur Dust')?.coveredBy).toBe('storage');
-
-    // storage is not a machine: having it on hand must never make the item look
-    // like something this line produces
-    expect(find(ledger.products, 'Sulfur Dust')).toBeUndefined();
-  });
-
-  it('leaves the shortfall beyond a rate cap as real work', () => {
-    const a = consumer();
-    const needed = -meLedger(state().nodes).required.find(
-      entry => entry.name === 'Sulfur Dust',
-    )!.net;
-
-    storage([{ name: 'Sulfur Dust', rate: needed / 4 }]);
-    const entry = find(meLedger(state().nodes).required, 'Sulfur Dust');
-
-    // a quarter covered, so three quarters still has to come from somewhere
-    expect(entry).toBeDefined();
-    expect(-entry!.net).toBeCloseTo(needed * 0.75, 9);
-    expect(entry!.covered).toBeCloseTo(needed / 4, 9);
-
-    // the per-pass column is scaled to match, or the two columns would disagree
-    const perPass = entry!.consumedPerPass - entry!.producedPerPass;
-    expect(perPass).toBeCloseTo(
-      4 * overclock(recipeData(a)).parallels * 0.75,
-      9,
-    );
-  });
-
-  it('adds up several storage nodes holding the same item', () => {
-    consumer();
-    const needed = -meLedger(state().nodes).required.find(
-      entry => entry.name === 'Sulfur Dust',
-    )!.net;
-
-    storage([{ name: 'Sulfur Dust', rate: needed / 2 }]);
-    storage([{ name: 'Sulfur Dust', rate: needed / 2 }]);
-
-    const ledger = meLedger(state().nodes);
-    expect(find(ledger.required, 'Sulfur Dust')).toBeUndefined();
-    expect(find(ledger.covered, 'Sulfur Dust')).toBeDefined();
-  });
-
-  it('matches stored names case- and space-insensitively', () => {
-    consumer();
-    storage([{ name: '  sulfur   dust ' }]);
-
-    expect(find(meLedger(state().nodes).covered, 'Sulfur Dust')).toBeDefined();
-  });
-
-  it('keeps a covered item out of the metrics a line must be fed', () => {
-    consumer();
-    storage([{ name: 'Sulfur Dust' }]);
-
-    // "what must I supply" is the question lineMetrics answers in ME mode, and
-    // neither water nor anything on hand belongs in that answer
-    expect(lineMetrics(state().nodes, state().edges, true).inputs).toEqual([]);
-  });
-
-  it('says nothing about storage for an item the line never uses', () => {
-    consumer();
-    storage([{ name: 'Naquadah' }]);
-
-    const ledger = meLedger(state().nodes);
-    expect(find(ledger.covered, 'Naquadah')).toBeUndefined();
-    expect(find(ledger.products, 'Naquadah')).toBeUndefined();
-    expect(find(ledger.balanced, 'Naquadah')).toBeUndefined();
-  });
-});
-
-describe('starvation', () => {
-  // every recipe here carries the same power and duration, so a row's rate is
-  // proportional to its quantity and the arithmetic stays readable
-  const recipe = (
-    ins: [string, number][],
-    outs: [string, number][],
-  ): string => {
-    const id = addNode('recipeNode');
-    for (const [name, quantity] of ins) {
-      const item = addInput(id);
-      state().updateRecipeInput(id, item, { name, quantity });
-    }
-    for (const [name, quantity] of outs) {
-      const item = addOutput(id);
-      state().updateRecipeOutput(id, item, { name, quantity });
-    }
-    completeRecipe(id);
-    return id;
-  };
-
-  it('leaves a line that keeps up at full speed', () => {
-    const a = recipe([['Ore', 4]], [['Plate', 4]]);
-    const b = recipe([], [['Ore', 4]]);
-
-    const result = starvation(state().nodes);
-    expect(result.worst).toBe(1);
-    expect(result.limiting).toBeUndefined();
-    expect(result.speed.get(a)).toBe(1);
-    expect(result.speed.get(b)).toBe(1);
-  });
-
-  it('holds a machine to the share of the input it can actually get', () => {
-    const consumer = recipe([['Ore', 4]], [['Plate', 4]]);
-    recipe([], [['Ore', 1]]);
-
-    // a quarter of the ore it wants, so a quarter of the speed
-    const result = starvation(state().nodes);
-    expect(result.speed.get(consumer)).toBeCloseTo(0.25, 9);
-    expect(result.worst).toBeCloseTo(0.25, 9);
-    expect(result.limiting).toBe('Ore');
-  });
-
-  it('carries a shortage downstream to everything behind it', () => {
-    // C makes 2 X; B wants 4 X and makes 4 Y; A wants 8 Y. B is held to half,
-    // which halves the Y it makes, which holds A to a quarter
-    recipe([], [['X', 2]]);
-    const b = recipe([['X', 4]], [['Y', 4]]);
-    const a = recipe([['Y', 8]], [['Done', 1]]);
-
-    const result = starvation(state().nodes);
-    expect(result.speed.get(b)).toBeCloseTo(0.5, 9);
-    expect(result.speed.get(a)).toBeCloseTo(0.25, 9);
-    expect(result.worst).toBeCloseTo(0.25, 9);
-
-    // A is waiting on Y, but B is already flat out making all the Y it can —
-    // the shortage that a machine can actually cure is X, one hop further back
-    expect(result.limiting).toBe('X');
-  });
-
-  it('settles rather than oscillating when the line loops', () => {
-    // A feeds B and B feeds A, the shape a real processing loop has
-    recipe([['Y', 1]], [['X', 1]]);
-    recipe([['X', 4]], [['Y', 4]]);
-
-    const result = starvation(state().nodes);
-    expect(Number.isFinite(result.worst)).toBe(true);
-    expect(result.worst).toBeGreaterThan(0);
-    expect(result.worst).toBeLessThan(1);
-  });
-
-  it('never starves an item nothing in the line makes', () => {
-    const only = recipe([['Naquadah', 9999]], [['Plate', 1]]);
-
-    // it is on the required list, which is where it belongs — it is not a
-    // reason to report the machine as running slowly
-    expect(starvation(state().nodes).speed.get(only)).toBe(1);
-  });
-
-  it('never starves water, or anything held in storage', () => {
-    const consumer = recipe(
-      [
-        ['Water', 9999],
-        ['Ore', 4],
-      ],
-      [['Plate', 1]],
-    );
-    recipe([], [['Ore', 1]]);
-
-    const before = starvation(state().nodes);
-    expect(before.limiting).toBe('Ore');
-
-    const store = addNode('storageNode');
-    state().addStorageItem(store);
-    const item = (
-      state().nodes.find(n => n.id === store)!.data as {
-        items: { id: string }[];
-      }
-    ).items[0]!.id;
-    state().updateStorageItem(store, item, { name: 'Ore' });
-
-    expect(starvation(state().nodes).speed.get(consumer)).toBe(1);
-  });
-});
-
-describe('lineFlow', () => {
-  const recipe = (ins: [string, number][], outs: [string, number][]) => {
-    const id = addNode('recipeNode');
-    for (const [name, quantity] of ins) {
-      const item = addInput(id);
-      state().updateRecipeInput(id, item, { name, quantity });
-    }
-    for (const [name, quantity] of outs) {
-      const item = addOutput(id);
-      state().updateRecipeOutput(id, item, { name, quantity });
-    }
-    completeRecipe(id);
-    return id;
-  };
-
-  it('orders machines by the items they exchange, with no edges drawn', () => {
-    const a = recipe([], [['Ore', 4]]);
-    const b = recipe([['Ore', 4]], [['Plate', 4]]);
-
-    const { successors, cycle } = lineFlow(state().nodes);
-    expect(successors.get(a)).toEqual([b]);
-    expect(successors.get(b)).toEqual([]);
-    expect(cycle).toBeUndefined();
-  });
-
-  it('finds the cycle in a loop', () => {
-    const a = recipe([['Y', 1]], [['X', 1]]);
-    const b = recipe([['X', 1]], [['Y', 1]]);
-
-    expect(lineFlow(state().nodes).cycle?.slice().sort()).toEqual(
-      [a, b].sort(),
-    );
-  });
-
-  it('does not call a machine feeding itself a loop', () => {
-    // a recipe listing the same item in and out is legal, not an ordering
-    recipe(
-      [['Catalyst', 1]],
-      [
-        ['Catalyst', 1],
-        ['Plate', 1],
-      ],
-    );
-    expect(lineFlow(state().nodes).cycle).toBeUndefined();
-  });
-});
-
-describe('lineEnergy — ME mode', () => {
-  const recipe = (ins: [string, number][], outs: [string, number][]) => {
-    const id = addNode('recipeNode');
-    for (const [name, quantity] of ins) {
-      const item = addInput(id);
-      state().updateRecipeInput(id, item, { name, quantity });
-    }
-    for (const [name, quantity] of outs) {
-      const item = addOutput(id);
-      state().updateRecipeOutput(id, item, { name, quantity });
-    }
-    completeRecipe(id);
-    return id;
-  };
-
-  it('times an unwired chain from the items alone', () => {
-    const a = recipe([], [['Ore', 4]]);
-    const b = recipe([['Ore', 4]], [['Plate', 4]]);
-
-    // wired mode sees no edges and so no chain at all; ME mode reads the
-    // ordering off the items and gets the real two-stage duration
-    const nominal =
-      overclock(recipeData(a)).time * recipeData(a).multiplier +
-      overclock(recipeData(b)).time * recipeData(b).multiplier;
-
-    expect(lineEnergy(state().nodes, [], true).time).toBeCloseTo(nominal, 9);
-    expect(lineEnergy(state().nodes, []).time).toBeLessThan(nominal);
-  });
-
-  it('reports a loop instead of inventing a critical path for it', () => {
-    recipe([['Y', 1]], [['X', 1]]);
-    recipe([['X', 1]], [['Y', 1]]);
-
-    const looped = lineEnergy(state().nodes, [], true);
-    expect(looped.looped).toBe(true);
-    expect(looped.time).toBe(0);
-    // the power figure is unaffected — every machine still draws what it draws
-    expect(looped.demand).toBeGreaterThan(0);
+    const sink = state().nodes.find(
+      n => n.type === 'outputNode' && n.data.name === 'Plate',
+    )!;
+    expect((sink.data as SinkNodeData).quantity).toBe(7);
   });
 });

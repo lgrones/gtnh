@@ -1,4 +1,4 @@
-import { Group, Paper, Text, Tooltip, type MantineColor } from '@mantine/core';
+import { Group, Paper, Text, type MantineColor } from '@mantine/core';
 import { useMounted } from '@mantine/hooks';
 import { IconGripVertical } from '@tabler/icons-react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
@@ -17,12 +17,6 @@ interface ProductionNodeProps extends NodeProps<Omit<IProductionNode, 'type'>> {
   type: 'source' | 'target' | 'none';
   // false for sink nodes whose name is driven by the connected output
   editable?: boolean;
-  // the mode this node has no meaning in, if there is one. The leaves stand in
-  // for the world outside a wired line, and an ME network IS that outside world,
-  // so they go quiet in ME mode; a storage node is the ME answer to the same
-  // question and goes quiet when wired. Either way it is shown rather than
-  // deleted, since the graph can change mode back
-  ignoredIn?: 'me' | 'wired';
   children?: React.ReactNode;
   leftSection?: React.ReactNode;
   rightSection?: React.ReactNode;
@@ -34,15 +28,11 @@ export const ProductionNode = ({
   type,
   color,
   editable = true,
-  ignoredIn,
   children,
   rightSection,
   leftSection,
 }: ProductionNodeProps) => {
   const renameNode = useProductionStore(state => state.renameNode);
-  const ignored = useProductionStore(
-    state => ignoredIn !== undefined && state.meMode === (ignoredIn === 'me'),
-  );
   const mounted = useMounted();
   const inputRef = useRef<HTMLSpanElement>(null);
 
@@ -75,48 +65,35 @@ export const ProductionNode = ({
 
   return (
     <>
-      <Tooltip
-        label={
-          ignoredIn === 'me'
-            ? 'Ignored in ME mode — the network ledger covers this'
-            : 'Ignored while wired — add an input node instead'
-        }
-        disabled={!ignored}
-        withArrow
+      <Paper
+        className={classes.node}
+        style={{ '--node-color': `var(--mantine-color-${color}-filled)` }}
+        mod={[type]}
       >
-        <Paper
-          className={classes.node}
-          style={{
-            '--node-color': `var(--mantine-color-${color}-filled)`,
-            opacity: ignored ? 0.4 : undefined,
-          }}
-          mod={[type]}
-        >
-          <Group className={classes.inputs}>
-            <IconGripVertical size={20} className={DRAG_HANDLE_CLASS} />
+        <Group className={classes.inputs}>
+          <IconGripVertical size={20} className={DRAG_HANDLE_CLASS} />
 
-            {leftSection}
+          {leftSection}
 
-            <Text<'span'>
-              span
-              contentEditable={editable}
-              onBlur={
-                editable
-                  ? e => renameNode(id, e.currentTarget.textContent)
-                  : undefined
-              }
-              className={classes.input}
-              role="textbox"
-              ref={inputRef}
-              dangerouslySetInnerHTML={{ __html: data.name }}
-            />
+          <Text<'span'>
+            span
+            contentEditable={editable}
+            onBlur={
+              editable
+                ? e => renameNode(id, e.currentTarget.textContent)
+                : undefined
+            }
+            className={classes.input}
+            role="textbox"
+            ref={inputRef}
+            dangerouslySetInnerHTML={{ __html: data.name }}
+          />
 
-            {rightSection}
-          </Group>
+          {rightSection}
+        </Group>
 
-          {children}
-        </Paper>
-      </Tooltip>
+        {children}
+      </Paper>
 
       {type === 'target' && (
         <Handle

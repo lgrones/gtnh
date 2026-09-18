@@ -16,12 +16,7 @@ let graph: YjsGraph;
 let binding: Binding;
 
 beforeEach(() => {
-  useProductionStore.setState({
-    nodes: [],
-    edges: [],
-    generator: null,
-    meMode: false,
-  });
+  useProductionStore.setState({ nodes: [], edges: [], generator: null });
   graph = createGraphDoc();
   binding = bindStore(graph);
 });
@@ -88,29 +83,50 @@ describe('binding: echo guard', () => {
 });
 
 describe('binding: per-graph settings', () => {
-  it('mirrors the ME flag into the doc so it travels with the graph', () => {
-    useProductionStore.setState({ meMode: true });
-    expect(graph.meta.get('meMode')).toBe(true);
+  it('mirrors the generator selection into the doc so it travels with the graph', () => {
+    useProductionStore.setState({
+      generator: { categoryId: 'diesel', fuelName: null },
+    });
+
+    expect(graph.meta.get('generator')).toEqual({
+      categoryId: 'diesel',
+      fuelName: null,
+    });
   });
 
   it('deletes the key rather than storing the default', () => {
-    useProductionStore.setState({ meMode: true });
-    useProductionStore.setState({ meMode: false });
+    useProductionStore.setState({
+      generator: { categoryId: 'diesel', fuelName: null },
+    });
+    useProductionStore.setState({ generator: null });
 
-    // a graph that never turned ME mode on carries no entry for it, so an old
-    // snapshot and a deliberately-wired one look the same on the wire
-    expect(graph.meta.has('meMode')).toBe(false);
+    // a graph nobody picked a generator for carries no entry for it, so an old
+    // snapshot and a deliberately-cleared one look the same on the wire
+    expect(graph.meta.has('generator')).toBe(false);
   });
 
-  it('applies a remote ME flag into the store', () => {
-    graph.doc.transact(() => graph.meta.set('meMode', true), 'rtdb');
-    expect(useProductionStore.getState().meMode).toBe(true);
+  it('applies a remote generator selection into the store', () => {
+    graph.doc.transact(
+      () =>
+        graph.meta.set('generator', { categoryId: 'steam', fuelName: null }),
+      'rtdb',
+    );
+
+    expect(useProductionStore.getState().generator).toEqual({
+      categoryId: 'steam',
+      fuelName: null,
+    });
   });
 
-  it('reads a graph with no stored flag as a wired line', () => {
-    graph.doc.transact(() => graph.meta.set('meMode', true), 'rtdb');
-    graph.doc.transact(() => graph.meta.delete('meMode'), 'rtdb');
-    expect(useProductionStore.getState().meMode).toBe(false);
+  it('reads a graph with no stored selection as unpicked', () => {
+    graph.doc.transact(
+      () =>
+        graph.meta.set('generator', { categoryId: 'steam', fuelName: null }),
+      'rtdb',
+    );
+    graph.doc.transact(() => graph.meta.delete('generator'), 'rtdb');
+
+    expect(useProductionStore.getState().generator).toBeNull();
   });
 });
 
@@ -119,9 +135,15 @@ describe('binding: switching graphs', () => {
     // the sequence session.open() runs: tear the old binding down, reset the
     // store, then bind the next doc. Getting that order wrong would push the
     // outgoing graph's settings into the incoming one, which is invisible until
-    // someone opens an unrelated line and finds it in ME mode
-    useProductionStore.getState().setMeMode(true);
-    expect(graph.meta.get('meMode')).toBe(true);
+    // someone opens an unrelated line and finds it running on someone else's
+    // generator
+    useProductionStore
+      .getState()
+      .setGenerator({ categoryId: 'diesel', fuelName: null });
+    expect(graph.meta.get('generator')).toEqual({
+      categoryId: 'diesel',
+      fuelName: null,
+    });
 
     binding.destroy();
     useProductionStore.getState().reset();
@@ -129,12 +151,62 @@ describe('binding: switching graphs', () => {
     const next = createGraphDoc();
     const nextBinding = bindStore(next);
 
-    expect(next.meta.get('meMode')).toBeUndefined();
-    expect(useProductionStore.getState().meMode).toBe(false);
+    expect(next.meta.get('generator')).toBeUndefined();
+    expect(useProductionStore.getState().generator).toBeNull();
 
     nextBinding.destroy();
     next.doc.destroy();
     // afterEach destroys `binding`; rebind so that stays valid
     binding = bindStore(graph);
+  });
+});
+
+// The failure this guards against, in the shape it actually took: a dev HMR
+// update replaces the session module without tearing the old session down, so
+// a binding holding graph A's doc is still subscribed to the store when graph B
+// loads into it. Unguarded, it mirrors B's nodes into A and deletes A's own.
+describe('binding: a superseded binding is read-only', () => {
+  it("never writes the newly opened graph into the previous graph's doc", () => {
+    // graph A, with content of its own
+    useProductionStore.setState({ nodes: [node('a1')] });
+    expect(graph.nodes.has('a1')).toBe(true);
+
+    // graph B opens; the old binding is leaked rather than destroyed
+    const next = createGraphDoc();
+    const nextBinding = bindStore(next);
+
+    useProductionStore.setState({ nodes: [node('b1')] });
+
+    expect(next.nodes.has('b1')).toBe(true);
+    // A keeps its own node and never receives B's
+    expect(graph.nodes.has('b1')).toBe(false);
+    expect(graph.nodes.has('a1')).toBe(true);
+
+    nextBinding.destroy();
+  });
+
+  it('leaves the claim free for the next binding when destroyed', () => {
+    const next = createGraphDoc();
+    bindStore(next).destroy();
+
+    const rebound = bindStore(next);
+    useProductionStore.setState({ nodes: [node('n1')] });
+
+    expect(next.nodes.has('n1')).toBe(true);
+    rebound.destroy();
+  });
+
+  it('does not let a new empty graph empty the one it replaces', () => {
+    useProductionStore.setState({ nodes: [node('a1')] });
+
+    // opening a fresh graph pulls its (empty) contents into the store — the
+    // outgoing binding must not read that as "the user deleted everything"
+    const next = createGraphDoc();
+    const nextBinding = bindStore(next);
+
+    expect(useProductionStore.getState().nodes).toEqual([]);
+    expect(graph.nodes.has('a1')).toBe(true);
+
+    nextBinding.destroy();
   });
 });

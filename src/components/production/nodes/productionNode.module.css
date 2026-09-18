@@ -139,27 +139,3 @@
 .kind-root[data-initialized] .kind-label[data-active]::before {
   display: block;
 }
-
-/* On an ME network the wiring is the exception, not the rule: a handle is only
-   there for the occasional direct pipe. Shrink and fade them so an unwired node
-   reads as finished rather than unfinished, and bring them back on hover so
-   drawing a pipe is still easy. */
-.recipe-input[data-me],
-.output[data-me] {
-  width: 8px;
-  height: 8px;
-  opacity: 0.3;
-  transition:
-    width 120ms ease,
-    height 120ms ease,
-    opacity 120ms ease;
-}
-
-/* stylelint-disable-next-line selector-class-pattern */
-:global(.react-flow__node):hover .recipe-input[data-me],
-/* stylelint-disable-next-line selector-class-pattern */
-:global(.react-flow__node):hover .output[data-me] {
-  width: 16px;
-  height: 16px;
-  opacity: 1;
-}

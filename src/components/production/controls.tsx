@@ -1,10 +1,6 @@
 import { Menu, Text } from '@mantine/core';
-import {
-  useHotkeys,
-  useMousePosition,
-  useUncontrolled,
-  type HotkeyItem,
-} from '@mantine/hooks';
+import { useHotkeys, useMousePosition, useUncontrolled } from '@mantine/hooks';
+import { modals } from '@mantine/modals';
 import { useReactFlow } from '@xyflow/react';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -13,8 +9,25 @@ import {
   layoutNodes,
   useProductionControls,
   useProductionStore,
-  type ProductionNodeType,
+  type HandleOffsets,
+  type PlaceableNodeType,
 } from '@/contexts/productionStore';
+
+import { SubLineModalContent } from './subLineModal';
+
+// picking which saved line to collapse in. Opened as a modal rather than a
+// submenu: the list is as long as the library and wants a search field
+const openSubLineModal = (position: { x: number; y: number }) => {
+  const id = modals.open({
+    title: 'Add a saved line as a node',
+    children: (
+      <SubLineModalContent
+        position={position}
+        onPicked={() => modals.close(id)}
+      />
+    ),
+  });
+};
 
 interface ControlsProps {
   opened?: boolean;
@@ -36,8 +49,14 @@ export const Controls = ({
     onChange,
   });
 
-  const { screenToFlowPosition, getNodes, getEdges, deleteElements, fitView } =
-    useReactFlow();
+  const {
+    screenToFlowPosition,
+    getNodes,
+    getEdges,
+    getInternalNode,
+    deleteElements,
+    fitView,
+  } = useReactFlow();
   const position = screenToFlowPosition(useMousePosition());
 
   const actions = useProductionControls();
@@ -62,17 +81,50 @@ export const Controls = ({
     state => (state.clipboard?.nodes.length ?? 0) > 0,
   );
 
-  // on an ME network the leaf nodes have nothing to stand in for: everything
-  // enters and leaves through the network, and the ledger reports it
-  const meMode = useProductionStore(state => state.meMode);
+  const add = (type: PlaceableNodeType) => actions.addNode(type, position);
 
-  const add = (type: ProductionNodeType) => actions.addNode(type, position);
+  // a sub-line cannot be created blank — it stands for a line that already
+  // exists, so placing one starts with picking which
+  const addSubLine = () => openSubLineModal(position);
+
+  // measure every per-item handle React Flow knows about — a recipe's rows and
+  // a collapsed sub-line's ports alike. React Flow keeps their bounds relative
+  // to the node, and an edge attaches at a handle's centre
+  const handleOffsets = (): HandleOffsets => {
+    const offsets: HandleOffsets = new Map();
+    for (const node of useProductionStore.getState().nodes) {
+      if (node.type !== 'recipeNode' && node.type !== 'lineNode') continue;
+      const bounds = getInternalNode(node.id)?.internals.handleBounds;
+      const handles = [...(bounds?.source ?? []), ...(bounds?.target ?? [])];
+      const measured = new Map(
+        handles.flatMap(handle =>
+          !handle.id
+            ? []
+            : [
+                [
+                  handle.id,
+                  {
+                    x: handle.x + handle.width / 2,
+                    y: handle.y + handle.height / 2,
+                  },
+                ] as const,
+              ],
+        ),
+      );
+      if (measured.size > 0) offsets.set(node.id, measured);
+    }
+    return offsets;
+  };
 
   // re-layout (ELK is async, so it lives here not in the store) then frame the
-  // result once React Flow has the new positions
+  // result once React Flow has the new positions. the handle offsets come from
+  // React Flow's measurements, so ELK routes edges from where the handles
+  // really are; its bend points replace whatever routing the edges carried
   const autoLayout = async () => {
     const { nodes, edges } = useProductionStore.getState();
-    actions.setNodes(await layoutNodes(nodes, edges));
+    const laid = await layoutNodes(nodes, edges, handleOffsets());
+    actions.setNodes(laid.nodes);
+    actions.setEdges(laid.edges);
     requestAnimationFrame(() => void fitView({ duration: 300 }));
   };
 
@@ -83,19 +135,11 @@ export const Controls = ({
       edges: getEdges().filter(edge => edge.selected),
     });
 
-  // Ctrl+I keeps its meaning across both models — "the stuff coming in from
-  // outside this line". Wired, that is an input leaf; on an ME network it is a
-  // storage node saying another line already supplies it
-  const leafKeys: HotkeyItem[] = meMode
-    ? [['CTRL+I', () => add('storageNode')]]
-    : [
-        ['CTRL+I', () => add('inputNode')],
-        ['CTRL+O', () => add('outputNode')],
-        ['CTRL+D', () => add('disposalNode')],
-      ];
-
   useHotkeys([
-    ...leafKeys,
+    ['CTRL+I', () => add('inputNode')],
+    ['CTRL+O', () => add('outputNode')],
+    ['CTRL+D', () => add('byproductNode')],
+    ['CTRL+M', () => addSubLine()],
     ['CTRL+R', () => add('recipeNode')],
     ['CTRL+Z', () => undo()],
     ['CTRL+Y', () => redo()],
@@ -128,28 +172,26 @@ export const Controls = ({
         <Menu.Label>Add Node</Menu.Label>
 
         <Menu.Item
-          onClick={() => add(meMode ? 'storageNode' : 'inputNode')}
+          onClick={() => add('inputNode')}
           rightSection={
             <Text size="xs" c="dimmed">
               Ctrl+I
             </Text>
           }
         >
-          {meMode ? 'Storage' : 'Input'}
+          Input
         </Menu.Item>
 
-        {!meMode && (
-          <Menu.Item
-            onClick={() => add('outputNode')}
-            rightSection={
-              <Text size="xs" c="dimmed">
-                Ctrl+O
-              </Text>
-            }
-          >
-            Output
-          </Menu.Item>
-        )}
+        <Menu.Item
+          onClick={() => add('outputNode')}
+          rightSection={
+            <Text size="xs" c="dimmed">
+              Ctrl+O
+            </Text>
+          }
+        >
+          Output
+        </Menu.Item>
 
         <Menu.Item
           onClick={() => add('recipeNode')}
@@ -162,18 +204,27 @@ export const Controls = ({
           Recipe
         </Menu.Item>
 
-        {!meMode && (
-          <Menu.Item
-            onClick={() => add('disposalNode')}
-            rightSection={
-              <Text size="xs" c="dimmed">
-                Ctrl+D
-              </Text>
-            }
-          >
-            Disposal
-          </Menu.Item>
-        )}
+        <Menu.Item
+          onClick={() => add('byproductNode')}
+          rightSection={
+            <Text size="xs" c="dimmed">
+              Ctrl+D
+            </Text>
+          }
+        >
+          Byproduct
+        </Menu.Item>
+
+        <Menu.Item
+          onClick={addSubLine}
+          rightSection={
+            <Text size="xs" c="dimmed">
+              Ctrl+M
+            </Text>
+          }
+        >
+          Sub-line
+        </Menu.Item>
 
         <Menu.Divider />
 

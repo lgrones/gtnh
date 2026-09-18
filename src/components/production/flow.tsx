@@ -33,11 +33,13 @@ import {
 import {
   useProductionFlow,
   useProductionStore,
+  type ProductionNode,
 } from '@/contexts/productionStore';
 
 import { AltTabs } from './altTabs';
 import { Controls } from './controls';
 import { Cursors } from './cursors';
+import { DrillCrumb } from './drillCrumb';
 import { edgeTypes } from './edges/edgeTypes';
 import { FlowOptions } from './flowOptions';
 import { nodeTypes } from './nodes/nodeTypes';
@@ -78,6 +80,24 @@ const FlowCanvas = () => {
     useShallow(state => ({ status: state.status, setCursor: state.setCursor })),
   );
 
+  const drillInto = useProductionLibrary(state => state.drillInto);
+
+  // double-clicking a collapsed sub-line opens the line it stands for, which is
+  // the only way to edit what is inside one. Its own controls (the copy count,
+  // the refresh and open buttons) keep their double-clicks — React Flow reports
+  // this for anything inside the node, including them
+  const onNodeDoubleClick = (event: MouseEvent, node: ProductionNode) => {
+    if (node.type !== 'lineNode') return;
+    if (
+      (event.target as HTMLElement | null)?.closest(
+        'input, button, [contenteditable="true"]',
+      )
+    )
+      return;
+
+    drillInto(node.data.graphId);
+  };
+
   const { screenToFlowPosition } = useReactFlow();
   const [menuOpened, setMenuOpened] = useState(false);
   const closeMenu = useCallback(() => setMenuOpened(false), []);
@@ -104,6 +124,7 @@ const FlowCanvas = () => {
         nodesDraggable
         nodesConnectable
         edgesReconnectable
+        onNodeDoubleClick={onNodeDoubleClick}
         onPaneClick={closeMenu}
         onMoveStart={closeMenu}
         onMouseMove={onMouseMove}
@@ -126,6 +147,7 @@ const FlowCanvas = () => {
 
         <Panel position="top-left">
           <Group gap="xs" align="center">
+            <DrillCrumb />
             <AltTabs />
             {status === 'loading' && <Loader size="xs" />}
           </Group>
