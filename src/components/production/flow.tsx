@@ -130,6 +130,7 @@ const FlowCanvas = () => {
         onMouseMove={onMouseMove}
         onMouseLeave={() => setCursor(null)}
         colorMode="system"
+        minZoom={0.0001}
         snapToGrid
         fitView
         style={

@@ -573,6 +573,44 @@ const demandByOutput = (
   return demand;
 };
 
+// per recipe-input handle, Σ what the recipe outputs wired into it actually
+// deliver. Two rules make a loop's contribution a number rather than a wish: an
+// output never delivers more than it makes, and one that is over-subscribed is
+// shared out in proportion to what each consumer asked for. keyed
+// `${target}:${targetHandle}`
+const supplyByInput = (
+  index: ItemIndex,
+  edges: Edge[],
+): Map<string, number> => {
+  const claims = demandByOutput(index, edges);
+  const supplied = new Map<string, number>();
+
+  for (const edge of edges) {
+    if (!edge.sourceHandle || !edge.targetHandle) continue;
+    const output = recipeItem(index, edge.source, edge.sourceHandle, 'outputs');
+    const input = recipeItem(index, edge.target, edge.targetHandle, 'inputs');
+    if (output === undefined || input === undefined) continue;
+
+    const sourceScale = index.scales.get(edge.source);
+    const targetScale = index.scales.get(edge.target);
+    if (sourceScale === undefined || targetScale === undefined) continue;
+
+    const asked = input.quantity * targetScale;
+    const claimed = claims.get(`${edge.source}:${edge.sourceHandle}`) ?? 0;
+    // `claimed` is the sum this edge's `asked` is part of, so it is only zero
+    // when nothing was asked at all
+    if (asked <= 0 || claimed <= 0) continue;
+
+    const made = output.quantity * sourceScale;
+    const delivered = Math.min(made, claimed) * (asked / claimed);
+
+    const key = `${edge.target}:${edge.targetHandle}`;
+    supplied.set(key, (supplied.get(key) ?? 0) + delivered);
+  }
+
+  return supplied;
+};
+
 // a connection is valid unless it joins two recipe items whose names disagree.
 // leaf connections (input-node -> recipe, recipe -> sink) always mirror, so are
 // always allowed. names compared case-insensitively, trimmed; empty can't match
@@ -625,7 +663,9 @@ export const freeSingleSlot = (
 //   - sinks (output/byproduct) mirror the upstream recipe OUTPUT they receive,
 //     but only the leftover quantity after downstream recipes take their share
 //     (may go negative -> visible over-draw warning)
-//   - input nodes mirror the downstream recipe INPUT they feed
+//   - input nodes mirror the downstream recipe INPUT they feed, less whatever
+//     a recipe already delivers into that same handle — an item a line loops
+//     back into itself is fed once, not twice
 // recipe->recipe edges are left untouched (recipes are the editable source of
 // truth); leaves with no connecting edge keep their current values
 export const syncMirrors = (
@@ -634,6 +674,7 @@ export const syncMirrors = (
 ): ProductionNode[] => {
   const index = indexItems(nodes);
   const demand = demandByOutput(index, edges);
+  const supplied = supplyByInput(index, edges);
 
   // leaf node id -> the name + quantity it should display
   const mirrors = new Map<string, { name: string; quantity: number }>();
@@ -659,11 +700,17 @@ export const syncMirrors = (
     // input node feeding a recipe input (edge enters a recipe input handle)
     if (edge.targetHandle) {
       const input = recipeItem(index, edge.target, edge.targetHandle, 'inputs');
-      if (input !== undefined)
+      if (input !== undefined) {
+        const needed = input.quantity * (index.scales.get(edge.target) ?? 1);
+        const loop = supplied.get(`${edge.target}:${edge.targetHandle}`) ?? 0;
         mirrors.set(edge.source, {
           name: input.name,
-          quantity: input.quantity * (index.scales.get(edge.target) ?? 1),
+          // the shortfall, never a negative amount to carry in: an output that
+          // loops back MORE than the input needs is over-production, and it is
+          // the source's own `surplus` that says so
+          quantity: Math.max(0, needed - loop),
         });
+      }
     }
   }
 
@@ -838,8 +885,22 @@ export const validateGraph = (
   const fed = new Set<string>();
   // output handle keys absorbed by a sink (leftover handled)
   const absorbed = new Set<string>();
-  // output handle key -> ids of the recipes it feeds
+  // output handle key -> ids of the recipes it feeds, minus any whose input
+  // handle an input leaf tops up
   const receivers = new Map<string, Set<string>>();
+
+  // input handle keys an input leaf feeds. A leaf carries in exactly the
+  // shortfall its handle is left with (see syncMirrors), so a handle in here
+  // cannot be short however little the recipes wired into it deliver — the
+  // deficit belongs to whatever ELSE that output owes, not to this receiver
+  const inputIds = new Set(
+    nodes.filter(node => node.type === 'inputNode').map(node => node.id),
+  );
+  const toppedUp = new Set(
+    edges
+      .filter(edge => edge.targetHandle && inputIds.has(edge.source))
+      .map(edge => `${edge.target}:${edge.targetHandle ?? ''}`),
+  );
 
   for (const edge of edges) {
     if (edge.targetHandle) fed.add(`${edge.target}:${edge.targetHandle}`);
@@ -853,9 +914,11 @@ export const validateGraph = (
       recipeItem(index, edge.target, edge.targetHandle, 'inputs');
 
     if (input) {
-      let set = receivers.get(key);
-      if (set === undefined) receivers.set(key, (set = new Set()));
-      set.add(edge.target);
+      if (!toppedUp.has(`${edge.target}:${edge.targetHandle ?? ''}`)) {
+        let set = receivers.get(key);
+        if (set === undefined) receivers.set(key, (set = new Set()));
+        set.add(edge.target);
+      }
 
       // a recipe<->recipe edge whose two item names disagree — usually the
       // aftermath of renaming one side; the link is kept but flagged here

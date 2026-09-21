@@ -2373,3 +2373,200 @@ describe('refreshLineNode', () => {
     expect((sink.data as SinkNodeData).quantity).toBe(7);
   });
 });
+
+describe('an input node against a loop', () => {
+  // R1 takes 4 Dust and makes 1 Plate; R2 takes that Plate and makes 3 Dust
+  // back. The line eats 4 Dust a pass and returns 3, so only 1 has to come in
+  const loop = (returned: number) => {
+    const r1 = addNode('recipeNode');
+    completeRecipe(r1);
+    const dustIn = addInput(r1);
+    state().updateRecipeInput(r1, dustIn, { name: 'Dust', quantity: 4 });
+    const plateOut = addOutput(r1);
+    state().updateRecipeOutput(r1, plateOut, { name: 'Plate', quantity: 1 });
+
+    const r2 = addNode('recipeNode');
+    completeRecipe(r2);
+    const plateIn = addInput(r2);
+    state().updateRecipeInput(r2, plateIn, { name: 'Plate', quantity: 1 });
+    const dustOut = addOutput(r2);
+    state().updateRecipeOutput(r2, dustOut, {
+      name: 'Dust',
+      quantity: returned,
+    });
+
+    state().onConnect({
+      source: r1,
+      target: r2,
+      sourceHandle: plateOut,
+      targetHandle: plateIn,
+    });
+    state().onConnect({
+      source: r2,
+      target: r1,
+      sourceHandle: dustOut,
+      targetHandle: dustIn,
+    });
+
+    const feed = addNode('inputNode');
+    state().onConnect({
+      source: feed,
+      target: r1,
+      sourceHandle: null,
+      targetHandle: dustIn,
+    });
+
+    return { r1, r2, dustIn, dustOut, feed };
+  };
+
+  const feedData = (id: string) =>
+    state().nodes.find(n => n.id === id)!.data as SinkNodeData;
+
+  it('carries in only the shortfall the loop leaves', () => {
+    const { feed } = loop(3);
+    expect(feedData(feed)).toMatchObject({ name: 'Dust', quantity: 1 });
+  });
+
+  it('carries in nothing when the loop covers the whole demand', () => {
+    const { feed } = loop(4);
+    expect(feedData(feed).quantity).toBe(0);
+  });
+
+  it('never goes negative when the loop returns more than is needed', () => {
+    // the over-production is the loop recipe's own surplus to report, not an
+    // amount for the input node to carry in backwards
+    const { feed } = loop(6);
+    expect(feedData(feed).quantity).toBe(0);
+  });
+
+  it('follows the loop recipe’s multiplier', () => {
+    const { r2, feed } = loop(3);
+    // two passes of R2 make 6 Dust against R1's 4, so nothing has to come in
+    state().updateRecipe(r2, { multiplier: 2 });
+    expect(feedData(feed).quantity).toBe(0);
+  });
+
+  it('still asks for the whole amount with no loop wired in', () => {
+    const r1 = addNode('recipeNode');
+    completeRecipe(r1);
+    const dustIn = addInput(r1);
+    state().updateRecipeInput(r1, dustIn, { name: 'Dust', quantity: 4 });
+    const feed = addNode('inputNode');
+    state().onConnect({
+      source: feed,
+      target: r1,
+      sourceHandle: null,
+      targetHandle: dustIn,
+    });
+    expect(feedData(feed).quantity).toBe(4);
+  });
+
+  it('shares an over-subscribed output out in proportion to what was asked', () => {
+    // one output of 3 against two consumers wanting 6 and 2: the first is owed
+    // 3 x 6/8, so its input node makes up the other 3.75
+    const source = addNode('recipeNode');
+    completeRecipe(source);
+    const outId = addOutput(source);
+    state().updateRecipeOutput(source, outId, { name: 'Dust', quantity: 3 });
+
+    const big = addNode('recipeNode');
+    completeRecipe(big);
+    const bigIn = addInput(big);
+    state().updateRecipeInput(big, bigIn, { name: 'Dust', quantity: 6 });
+
+    const small = addNode('recipeNode');
+    completeRecipe(small);
+    const smallIn = addInput(small);
+    state().updateRecipeInput(small, smallIn, { name: 'Dust', quantity: 2 });
+
+    for (const [target, handle] of [
+      [big, bigIn],
+      [small, smallIn],
+    ] as const)
+      state().onConnect({
+        source,
+        target,
+        sourceHandle: outId,
+        targetHandle: handle,
+      });
+
+    const feed = addNode('inputNode');
+    state().onConnect({
+      source: feed,
+      target: big,
+      sourceHandle: null,
+      targetHandle: bigIn,
+    });
+    expect(feedData(feed).quantity).toBeCloseTo(3.75, 10);
+  });
+});
+
+describe('validateGraph against a loop an input node tops up', () => {
+  // the same R1/R2 loop: R1 wants 4 Dust, R2 returns 3, an input leaf carries
+  // in the last 1. Nothing is short, and the validator has to agree
+  const loop = (returned: number, withFeed: boolean) => {
+    const r1 = addNode('recipeNode');
+    completeRecipe(r1);
+    state().renameNode(r1, 'R1');
+    const dustIn = addInput(r1);
+    state().updateRecipeInput(r1, dustIn, { name: 'Dust', quantity: 4 });
+    const plateOut = addOutput(r1);
+    state().updateRecipeOutput(r1, plateOut, { name: 'Plate', quantity: 1 });
+
+    const r2 = addNode('recipeNode');
+    completeRecipe(r2);
+    state().renameNode(r2, 'R2');
+    const plateIn = addInput(r2);
+    state().updateRecipeInput(r2, plateIn, { name: 'Plate', quantity: 1 });
+    const dustOut = addOutput(r2);
+    state().updateRecipeOutput(r2, dustOut, {
+      name: 'Dust',
+      quantity: returned,
+    });
+
+    state().onConnect({
+      source: r1,
+      target: r2,
+      sourceHandle: plateOut,
+      targetHandle: plateIn,
+    });
+    state().onConnect({
+      source: r2,
+      target: r1,
+      sourceHandle: dustOut,
+      targetHandle: dustIn,
+    });
+
+    if (withFeed) {
+      const feed = addNode('inputNode');
+      state().onConnect({
+        source: feed,
+        target: r1,
+        sourceHandle: null,
+        targetHandle: dustIn,
+      });
+    }
+
+    return validateGraph(state().nodes, state().edges);
+  };
+
+  it('reports no deficit on the handle the leaf covers', () => {
+    expect(loop(3, true).filter(issue => issue.kind === 'deficit')).toEqual([]);
+  });
+
+  it('reports no surplus for the loop output either', () => {
+    expect(loop(3, true).filter(issue => issue.kind === 'surplus')).toEqual([]);
+  });
+
+  it('still reports the deficit when no leaf tops the handle up', () => {
+    expect(loop(3, false)).toContainEqual(
+      expect.objectContaining({
+        kind: 'deficit',
+        recipe: 'R1',
+        item: 'Dust',
+        supply: 3,
+        demand: 4,
+      }),
+    );
+  });
+});

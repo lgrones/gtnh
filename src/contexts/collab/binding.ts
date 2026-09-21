@@ -2,6 +2,7 @@ import { type Edge } from '@xyflow/react';
 
 import {
   normalizeNodes,
+  syncMirrors,
   useProductionStore,
   type GeneratorSelection,
   type ProductionNode,
@@ -76,8 +77,17 @@ export const bindStore = (graph: YjsGraph): Binding => {
 
     applyingRemote = true;
     // graphs persisted before a field existed arrive raw from the doc, so they
-    // are backfilled here as well as in `reset` — this is the live path
-    useProductionStore.setState({ nodes: normalizeNodes(nodes), edges });
+    // are backfilled here as well as in `reset` — this is the live path.
+    // syncMirrors on top of it because a leaf's quantity is derived, and a doc
+    // written before the derivation changed still carries the old number: an
+    // input node feeding a loop was saved asking for the whole amount rather
+    // than the shortfall. `applyingRemote` keeps this out of the doc, so the
+    // correction is local until someone's next edit pushes it
+    const backfilled = normalizeNodes(nodes);
+    useProductionStore.setState({
+      nodes: syncMirrors(backfilled, edges),
+      edges,
+    });
     applyingRemote = false;
   };
 

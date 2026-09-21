@@ -1,7 +1,7 @@
 import { useStore as useFlowStore, type ReactFlowState } from '@xyflow/react';
 import { create } from 'zustand/react';
-import { shallow } from 'zustand/shallow';
 import { useShallow } from 'zustand/react/shallow';
+import { shallow } from 'zustand/shallow';
 
 import { normalizeNodes } from './helpers';
 import { createClipboardSlice } from './slices/clipboard';
@@ -47,6 +47,7 @@ export {
   machineTier,
   nodeItems,
   normalizeNodes,
+  syncMirrors,
   validateGraph,
   lineEnergy,
   lineMetrics,
