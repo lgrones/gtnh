@@ -302,3 +302,49 @@ export const fieldAssignments = (klass: JavaClass, name: string): string[] => {
 
   return found;
 };
+
+/**
+ * Method-local declarations of a primitive, as source text.
+ *
+ * GT's parallel methods routinely name their working out — `final long tVoltage
+ * = getMaxInputVoltage();` then `final byte tTier = (byte) Math.max(1,
+ * GTUtility.getTier(tVoltage));` — so the `return` alone says nothing without
+ * them.
+ *
+ * A name assigned anywhere else in the body is dropped, for the same reason
+ * `fieldAssignments` drops a field with two meaningful assignments: a local
+ * that starts at 1 and becomes 8 inside an `if` would otherwise resolve to 1,
+ * and a plausible wrong number is the one outcome this extractor may not
+ * produce. Only primitives are read; an object local carries state no
+ * expression tree can hold.
+ */
+export const localDeclarations = (body: string): Record<string, string> => {
+  const found: Record<string, string> = {};
+  const pattern =
+    /(?:(?<=[;{}])|^)\s*(?:final\s+)?(?:int|long|float|double|short|byte|boolean)\s+(\w+)\s*=([^;]*);/g;
+
+  for (const match of body.matchAll(pattern)) {
+    const [, name, value] = match;
+    if (name === undefined || value === undefined) continue;
+    // declared twice, so which one a `return` sees depends on the branch taken
+    if (name in found) {
+      delete found[name];
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed === '') continue;
+    found[name] = trimmed;
+  }
+
+  // a later `name = …` reassignment makes the declaration only the first of
+  // several values the name holds
+  for (const name of Object.keys(found)) {
+    const assignments = new RegExp(
+      String.raw`(?:^|[^\w.])(?:this\s*\.\s*)?${name}\s*(?:=[^=]|\+\+|--|[-+*/]=)`,
+      'g',
+    );
+    if ([...body.matchAll(assignments)].length > 1) delete found[name];
+  }
+
+  return found;
+};

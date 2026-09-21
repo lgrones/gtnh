@@ -122,3 +122,41 @@ describe('what stays unresolved', () => {
     expect(() => map(java)).toThrow(MapError);
   });
 });
+
+describe('names the caller puts in scope', () => {
+  // GT spells the tier over two statements as often as in one
+  const fields = {
+    tVoltage: parseJava('getMaxInputVoltage()'),
+    tTier: parseJava('(byte) Math.max(1, GTUtility.getTier(tVoltage))'),
+  };
+
+  it('follows an alias into getTier', () => {
+    expect(map('GTUtility.getTier(tVoltage)', { fields }).expr).toBe('tier');
+  });
+
+  it('maps the Industrial Maceration Stack’s parallels', () => {
+    const { expr, params } = map(
+      'Math.max(1, (controllerTier == 1 ? 2 : 8) * tTier)',
+      { fields },
+    );
+    expect(expr).toEqual({
+      max: [
+        1,
+        {
+          mul: [
+            { when: ['param.controllerTier', 1, 2, 8] },
+            { floor: { max: [1, 'tier'] } },
+          ],
+        },
+      ],
+    });
+    expect(params.map(param => param.id)).toEqual(['controllerTier']);
+  });
+
+  it('still refuses getTier of something else', () => {
+    const other = { tVoltage: parseJava('getAverageInputVoltage()') };
+    expect(() => map('GTUtility.getTier(tVoltage)', { fields: other })).toThrow(
+      MapError,
+    );
+  });
+});

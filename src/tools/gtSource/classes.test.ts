@@ -5,6 +5,7 @@ import {
   callSites,
   constants,
   fieldAssignments,
+  localDeclarations,
   methodBody,
   parseJavaFile,
   returnExpressions,
@@ -131,5 +132,50 @@ describe('class-level values', () => {
     expect(fieldAssignments(klass!, 'mHeatingCapacity')).toEqual([
       '(int) getCoilLevel().getHeat() + 100 * (GTUtility.getTier(getMaxInputVoltage()) - 2)',
     ]);
+  });
+});
+
+describe('method locals', () => {
+  // MTEIndustrialMacerator, verbatim: the return says nothing without them
+  const macerator = `
+        final long tVoltage = getMaxInputVoltage();
+        final byte tTier = (byte) Math.max(1, GTUtility.getTier(tVoltage));
+        return Math.max(1, (controllerTier == 1 ? 2 : 8) * tTier);
+  `;
+
+  it('reads every declaration, not only the first', () => {
+    expect(localDeclarations(macerator)).toEqual({
+      tVoltage: 'getMaxInputVoltage()',
+      tTier: '(byte) Math.max(1, GTUtility.getTier(tVoltage))',
+    });
+  });
+
+  it('drops a local that is assigned again', () => {
+    // resolving this to 1 would be a plausible wrong number, which is the one
+    // thing the extractor may not produce
+    const branching = `
+        int parallels = 1;
+        if (mMode == 1) parallels = 8;
+        return parallels;
+    `;
+    expect(localDeclarations(branching)).toEqual({});
+  });
+
+  it('drops a local declared twice', () => {
+    const twice = `
+        if (a) { int n = 2; return n; }
+        int n = 8;
+        return n;
+    `;
+    expect(localDeclarations(twice)).toEqual({});
+  });
+
+  it('ignores a for-loop counter and an object local', () => {
+    const loop = `
+        MTEHatch best = null;
+        for (int i = 0; i < mEnergyHatches.size(); i++) { }
+        return 1;
+    `;
+    expect(localDeclarations(loop)).toEqual({});
   });
 });

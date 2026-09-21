@@ -60,10 +60,30 @@ const COIL_PARAM: MachineParam = {
   required: true,
 };
 
-/** `GTUtility.getTier(getMaxInputVoltage())` — the only shape that means `tier` */
-const isMaxInputVoltage = (node: JavaExpr) =>
-  node.kind === 'call' &&
-  withoutThis(node.path).join('.') === 'getMaxInputVoltage';
+/**
+ * `GTUtility.getTier(getMaxInputVoltage())` — the only shape that means `tier`.
+ *
+ * `known` follows a name the caller put in scope, because GT usually spells it
+ * over two statements: `final long tVoltage = getMaxInputVoltage();` and then
+ * `getTier(tVoltage)`.
+ */
+const isMaxInputVoltage = (
+  node: JavaExpr,
+  known: Record<string, JavaExpr> = {},
+  seen: ReadonlySet<string> = new Set(),
+): boolean => {
+  if (node.kind === 'call')
+    return withoutThis(node.path).join('.') === 'getMaxInputVoltage';
+  if (node.kind !== 'name') return false;
+  const path = withoutThis(node.path);
+  const [head] = path;
+  if (path.length !== 1 || head === undefined || seen.has(head)) return false;
+  const aliased = known[head];
+  return (
+    aliased !== undefined &&
+    isMaxInputVoltage(aliased, known, new Set([...seen, head]))
+  );
+};
 
 const mentionsCoil = (path: string[]) =>
   path.some(segment => COIL_NAMES.has(segment));
@@ -202,7 +222,11 @@ export const mapJava = (node: JavaExpr, options: MapOptions): Mapped => {
 
     if (name === 'GTUtility.getTier') {
       const [only] = args;
-      if (args.length === 1 && only !== undefined && isMaxInputVoltage(only))
+      if (
+        args.length === 1 &&
+        only !== undefined &&
+        isMaxInputVoltage(only, options.fields ?? {})
+      )
         return 'tier';
       throw new MapError(
         `getTier of something other than getMaxInputVoltage: ${say(current)}`,

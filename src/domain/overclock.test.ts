@@ -476,3 +476,66 @@ describe('memoisation', () => {
     expect(overclock(multi()).power).toBe(overclock(multi()).power);
   });
 });
+
+describe('the Industrial Maceration Stack — a parallel model with an upgrade in it', () => {
+  // `Math.max(1, (controllerTier == 1 ? 2 : 8) * tTier)` where tTier is the
+  // summed hatch voltage's tier, so the parallel count is the wiki's table
+  const ims = (
+    controllerTier: number,
+    hatches: EnergyHatch[],
+  ): RecipeNodeData =>
+    multi({
+      machine: 'Industrial Maceration Stack',
+      hatches,
+      config: { controllerTier },
+      // 2 EU/t over 400 ticks — the ore-processing macerator recipe
+      eu: 800,
+      time: 20,
+    });
+
+  it.each([
+    ['T1 on LV', 1, 'LV' as const, 2],
+    ['T1 on EV', 1, 'EV' as const, 8],
+    ['T2 on LV', 2, 'LV' as const, 8],
+    ['T2 on EV', 2, 'EV' as const, 32],
+    ['T2 on UV', 2, 'UV' as const, 64],
+  ])('gives %s %i parallels', (_what, controllerTier, tier, expected) => {
+    // one hatch, so the sum and the average agree and the tier is the hatch's
+    expect(
+      overclock(ims(controllerTier, [hatch(tier)])).parallel.machineCap,
+    ).toBe(expected);
+  });
+
+  it('reads the summed voltage, so four EV hatches are an IV machine', () => {
+    // 4 x 2,048 = 8,192, which GT numbers tier 5, so 8 x 5
+    expect(overclock(ims(2, [hatch('EV', 4)])).parallel.machineCap).toBe(40);
+  });
+
+  it('runs 1.6x faster and takes ordinary overclocks', () => {
+    // 8 parallels of 2 EU/t is 16, and one EV hatch delivers 2,048 at 1 A,
+    // so log4(128) is 3 overclocks
+    const result = overclock(ims(1, [hatch('EV')]));
+    expect(result.parallels).toBe(8);
+    expect(result.oc.total).toBe(3);
+    expect(result.power).toBe(1024); // 16 x 4^3
+    // 400 / 1.6 = 250, then three halvings — 31.25 truncated
+    expect(result.durationTicks).toBe(31);
+  });
+
+  it('asks which tier the controller is before it answers', () => {
+    const unset = overclock(
+      multi({
+        machine: 'Industrial Maceration Stack',
+        hatches: [hatch('EV')],
+        eu: 800,
+        time: 20,
+      }),
+    );
+    expect(unset.machine.parameters.map(param => param.id)).toEqual([
+      'controllerTier',
+    ]);
+    // an unset required parameter falls back to the default, and the node
+    // raises `incomplete` rather than the engine inventing a number
+    expect(unset.parallel.machineCap).toBe(8);
+  });
+});

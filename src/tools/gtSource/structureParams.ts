@@ -1,7 +1,8 @@
 import type { CountParam } from '@/domain/machines/types';
 
-// Fields a controller fills in during `checkMachine` from the blocks the player
-// actually built, and which its parallel formula then reads.
+// Fields a controller fills in at runtime — from the blocks the player actually
+// built during `checkMachine`, or from an upgrade they installed — and which
+// its parallel formula then reads.
 //
 // The parser cannot follow these — the value exists only at runtime, in a world
 // — so each one becomes a machine *parameter* instead: the player tells the
@@ -29,6 +30,22 @@ export interface StructureParam {
  * that returns it. Both spellings are listed because both occur.
  */
 export const STRUCTURE_PARAMS: Record<string, StructureParam> = {
+  controllerTier: {
+    param: {
+      id: 'controllerTier',
+      kind: 'count',
+      label: 'Controller tier',
+      help: 'The Industrial Maceration Stack starts at 1 and becomes 2 once a Maceration Upgrade Chip is inserted, which multiplies its parallels from 2 per voltage tier to 8. The chip is consumed and cannot be taken back out.',
+      min: 1,
+      max: 2,
+      default: 1,
+      primary: true,
+      required: true,
+    },
+    source:
+      'MTEIndustrialMacerator — controllerTier starts at 1 and onRightclick/onPostTick set it to 2 for a Maceration_Upgrade_Chip; checkMachine then demands structureTier >= controllerTier',
+  },
+
   mAnvilTier: {
     param: {
       id: 'anvil',

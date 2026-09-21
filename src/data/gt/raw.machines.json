@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "gtVersion": "5.09.51.482",
-  "generatedAt": "2026-09-16T19:26:10.938Z",
+  "generatedAt": "2026-09-21T19:04:37.686Z",
   "machines": [
     {
       "id": "absolute_baryonic_perfection_purification_unit",
@@ -2300,26 +2300,46 @@
         "mod": "gtplusplus",
         "nameFrom": "registration"
       },
-      "params": [],
+      "params": [
+        {
+          "id": "controllerTier",
+          "kind": "count",
+          "label": "Controller tier",
+          "help": "The Industrial Maceration Stack starts at 1 and becomes 2 once a Maceration Upgrade Chip is inserted, which multiplies its parallels from 2 per voltage tier to 8. The chip is consumed and cannot be taken back out.",
+          "min": 1,
+          "max": 2,
+          "default": 1,
+          "primary": true,
+          "required": true
+        }
+      ],
       "processing": {
         "parallel": {
-          "kind": "unknown",
-          "reason": "getMaxParallelRecipes: Math.max(1, (controllerTier == 1 ? 2 : 8) * tTier)",
-          "assume": 1
+          "kind": "formula",
+          "expr": {
+            "max": [
+              1,
+              {
+                "mul": [
+                  { "when": ["param.controllerTier", 1, 2, 8] },
+                  { "floor": { "max": [1, "tier"] } }
+                ]
+              }
+            ]
+          }
         },
         "durationModifier": { "div": [1, 1.6] },
         "amperageOC": true
       },
       "calculator": {},
-      "confidence": "unknown",
+      "confidence": "modelled",
       "provenance": {
         "identity": "generated",
         "parallel": "generated",
         "processing": "generated",
         "calculator": "default",
-        "params": "none"
-      },
-      "notes": "Not fully read from source: getMaxParallelRecipes: Math.max(1, (controllerTier == 1 ? 2 : 8) * tTier); parallel."
+        "params": "generated"
+      }
     },
     {
       "id": "industrial_material_press",

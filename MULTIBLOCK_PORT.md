@@ -159,11 +159,11 @@ an ordinary `pnpm test` (64 of them). Every case in them is copied from real
 5.09.51.482 source, and the "refuses" cases matter as much as the passes: the
 extractor's contract is that it reports what it cannot read.
 
-**Results at 5.09.51.482**: 214 controllers — 171 `modelled`, 19 `partial`, 24
-`unknown`. Parallel models: 144 `none` (GT's default of 1), 31 `formula`, 15
-`constant`, 24 `unknown`. 7 machines declare a coil parameter and 4 a structure
-tier. 63 things could not be read, each listed in the report with its Java, its
-file and line, and its reason.
+**Results at 5.09.51.482**: 214 controllers — 172 `modelled`, 19 `partial`, 23
+`unknown`. Parallel models: 144 `none` (GT's default of 1), 32 `formula`, 15
+`constant`, 23 `unknown`. 7 machines declare a coil parameter and 5 a `count`.
+63 things could not be read, across 38 machines, each listed in the report with
+its Java, its file and line, and its reason.
 
 Spot-checked against the hand-worked stage-4 seeds and they agree: the EBF's
 `coil heat + 100 * (tier - 2)`, Volcanus at 8 parallels with 0.9 and 1/2.2, the
@@ -185,6 +185,52 @@ declares one.** A casing tier comes out as a `count` parameter with grounded
 bounds instead — anvil 1–4, item pipe 1–8, pipe casing 0–3, each with the source
 line the bounds came from. A named ladder is still the upgrade; the ParamKinds
 are reserved for it.
+
+## Stage 10 — the Industrial Maceration Stack
+
+The IMS was one of the 24 `unknown` parallel models, and its `assume: 1` was
+badly wrong: a T2 IMS on one EV hatch runs **32** parallels, not one. Reading it
+took three small extractor changes rather than an override, because each one
+generalises.
+
+```java
+final long tVoltage = getMaxInputVoltage();
+final byte tTier = (byte) Math.max(1, GTUtility.getTier(tVoltage));
+return Math.max(1, (controllerTier == 1 ? 2 : 8) * tTier);
+```
+
+- **`classes.ts` gains `localDeclarations`.** GT names its working out, so a
+  `return` alone says nothing. Only primitives are read, and a name assigned
+  again anywhere in the body is **dropped** — `int parallels = 1;` followed by
+  `parallels = 8` inside an `if` would otherwise resolve to 1, which is exactly
+  the plausible wrong number this extractor may not produce. `readParallel`
+  parses the method's own locals and passes them to `mapJava` as extra `fields`,
+  in scope for that one body.
+- **`mapExpr`'s `isMaxInputVoltage` follows an alias.** `getTier(tVoltage)` is
+  the tier reference when `tVoltage` is in scope as `getMaxInputVoltage()`.
+  `getTier` of anything else still refuses.
+- **`controllerTier` joins `STRUCTURE_PARAMS`**, whose header now says "at
+  runtime" rather than "during `checkMachine`": the IMS's tier comes from a
+  consumed Maceration Upgrade Chip, not from a casing. A `count` 1–2, so the
+  `when` in the formula compares against the raw value directly.
+
+The extracted model is `max(1, (controllerTier == 1 ? 2 : 8) * floor(max(1,
+tier)))`, and `tier` is the **summed** hatch voltage — four EV hatches are an IV
+machine, so a T2 gets 40. The parallel table on the wiki is reproduced exactly
+(T1 LV 2, T1 EV 8, T2 EV 32, T2 UV 64). The 160% speed was already read as
+`{ div: [1, 1.6] }`.
+
+Only the IMS moved: `formula` 31 → 32, `unknown` 24 → 23, `count` params 4 → 5.
+Seven tests were added across `classes`, `mapExpr` and `overclock`.
+
+**What is still not modelled, for the IMS or anything else: hatch restrictions.**
+The IMS's `buildHatchAdder(...).atLeast(Energy, Maintenance, InputBus, Muffler,
+OutputBus)` has no `ExoticEnergy`, so multi-amp and laser hatches cannot be
+built into it — the wiki says so too. The catalog has nowhere to put that, so a
+node can still be given a 64 A hatch the game would refuse. It is extractable
+(the hatch elements are named in `getStructureDefinition`) and it applies to
+every machine, so it is its own stage: a `Machine.hatches` field, an extractor
+pass, a `GraphIssue` kind and a node guard.
 
 ## Still to do
 

@@ -17,6 +17,7 @@ import {
   callSites,
   constants,
   fieldAssignments,
+  localDeclarations,
   methodBody,
   parseJavaFile,
   returnExpressions,
@@ -280,6 +281,8 @@ const readExpr = (
   reader: Reader,
   what: string,
   java: string,
+  /** Extra names in scope for this snippet alone — a method's own locals */
+  scope?: Record<string, JavaExpr>,
 ): { expr: Expr; params: MachineParam[] } | undefined => {
   let parsed: JavaExpr;
   try {
@@ -293,8 +296,13 @@ const readExpr = (
     return undefined;
   }
 
+  const options =
+    scope === undefined
+      ? reader.options
+      : { ...reader.options, fields: { ...reader.options.fields, ...scope } };
+
   try {
-    return mapJava(parsed, reader.options);
+    return mapJava(parsed, options);
   } catch (error) {
     reader.note(
       what,
@@ -410,7 +418,22 @@ const readParallel = (
   }
 
   const java = returns[0] ?? '';
-  const mapped = readExpr(reader, 'parallel', java);
+  // the method's own locals, so `return … * tTier` can see what tTier was
+  // declared as. Parsed here rather than in mapExpr because they are in scope
+  // for this one body and nothing else
+  const locals: Record<string, JavaExpr> = {};
+  for (const [name, value] of Object.entries(
+    localDeclarations(body?.text ?? ''),
+  )) {
+    try {
+      locals[name] = parseJava(value);
+    } catch {
+      // an unparseable local leaves the name unresolved, which is reported
+      // against the formula that uses it
+    }
+  }
+
+  const mapped = readExpr(reader, 'parallel', java, locals);
   if (mapped === undefined)
     return {
       model: {
