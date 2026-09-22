@@ -1172,6 +1172,29 @@ describe('lineEnergy', () => {
     expect(lineEnergy(state().nodes, state().edges).time).toBe(50);
   });
 
+  it('reports the slowest single step as the bottleneck, not the chain', () => {
+    const a = addNode('recipeNode');
+    const outId = addOutput(a);
+    state().updateRecipeOutput(a, outId, { name: 'Ore' });
+    state().updateRecipe(a, { eu: 0, time: 10, multiplier: 2 }); // 20s
+    const b = addNode('recipeNode');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore' });
+    state().updateRecipe(b, { eu: 0, time: 30 }); // 30s
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+
+    // a running line hands over a pass every 30s — a starts its next cycle
+    // while b works, so the 50s critical path is the first pass only
+    const { time, bottleneck } = lineEnergy(state().nodes, state().edges);
+    expect(time).toBe(50);
+    expect(bottleneck).toBe(30);
+  });
+
   it('runs independent branches in parallel (longest, not sum)', () => {
     const a = addNode('recipeNode');
     state().updateRecipe(a, { eu: 0, time: 40 });
@@ -1693,6 +1716,7 @@ describe('lineMetrics', () => {
       byproducts: [],
       machines: [],
       time: 0,
+      bottleneck: 0,
       demand: 0,
       incomplete: 0,
     });
@@ -2182,6 +2206,7 @@ describe('captureLine', () => {
       { machine: 'Macerator', quantity: 1, voltage: 'LV' },
     ]);
     expect(read.time).toBe(4);
+    expect(read.bottleneck).toBe(4);
     expect(read.demand).toBeGreaterThan(0);
     expect(read.tiers).toEqual([{ tier: 'LV', power: read.demand, amps: 1 }]);
     expect(read.incomplete).toBe(0);
@@ -2375,6 +2400,21 @@ describe('sub-line nodes — cost', () => {
     // the same machines, run three times over: same peak, three times as long
     expect(energy.demand).toBe(510);
     expect(energy.time).toBe(36);
+  });
+
+  it("takes the sub-line's own slowest step as the bottleneck it adds", () => {
+    const line = addLine(capture({ time: 12, bottleneck: 5 }));
+    state().setLineMultiplier(line, 3);
+
+    // the machines inside it stay concurrent, so three passes of a 5s step,
+    // not three passes of the 12s chain
+    expect(lineEnergy(state().nodes, state().edges).bottleneck).toBe(15);
+  });
+
+  it('falls back to the critical path when a capture predates the bottleneck', () => {
+    addLine(capture({ time: 12 }));
+
+    expect(lineEnergy(state().nodes, state().edges).bottleneck).toBe(12);
   });
 
   it('splits the draw into the tiers it was captured in', () => {

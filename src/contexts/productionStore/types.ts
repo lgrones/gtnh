@@ -210,6 +210,10 @@ export interface LineCapture {
   tiers: LineTier[]; // its draw per voltage tier, for generator sizing
   demand: number; // peak EU/t of the whole sub-line
   time: number; // its critical path, in seconds
+  // its slowest single step, in seconds — what a running copy of it turns a
+  // pass around in. Optional: captures taken before it was recorded have only
+  // the critical path, and readers fall back to that
+  bottleneck?: number;
   // recipes inside it missing the EU or the duration. A sub-line with holes in
   // it reports a demand and a time that are short by however much those would
   // have added, and the parent has no way to see that without being told

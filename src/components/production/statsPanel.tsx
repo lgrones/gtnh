@@ -4,6 +4,7 @@ import {
   IconArrowBigUpLines,
   IconBolt,
   IconClock,
+  IconHourglass,
   IconRecycle,
   IconSettings,
 } from '@tabler/icons-react';
@@ -43,7 +44,7 @@ export const StatsPanel = () => {
   // the machine tally comes from here rather than off the nodes directly,
   // because a collapsed sub-line's machines are real builds too and only
   // `lineMetrics` knows to unpack them
-  const { time, machines } = useMemo(
+  const { time, bottleneck, machines } = useMemo(
     () => lineMetrics(nodes, edges),
     [nodes, edges],
   );
@@ -53,7 +54,7 @@ export const StatsPanel = () => {
       <Items
         label="Inputs"
         nodes={nodes}
-        passSeconds={time}
+        cycleSeconds={bottleneck}
         type="inputNode"
         icon={
           <IconArrowBigUpLines
@@ -66,7 +67,7 @@ export const StatsPanel = () => {
       <Items
         label="Outputs"
         nodes={nodes}
-        passSeconds={time}
+        cycleSeconds={bottleneck}
         type="outputNode"
         icon={
           <IconArrowBigDownLines
@@ -79,7 +80,7 @@ export const StatsPanel = () => {
       <Items
         label="Byproducts"
         nodes={nodes}
-        passSeconds={time}
+        cycleSeconds={bottleneck}
         type="byproductNode"
         icon={
           <IconRecycle size={16} color="var(--mantine-color-orange-filled)" />
@@ -107,6 +108,15 @@ export const StatsPanel = () => {
         icon={<IconClock size={16} color="var(--mantine-color-blue-filled)" />}
       >
         <Text>{formatDuration(time)}</Text>
+      </Stat>
+
+      <Stat
+        label="Cycle time (slowest step)"
+        icon={
+          <IconHourglass size={16} color="var(--mantine-color-blue-filled)" />
+        }
+      >
+        <Text>{formatDuration(bottleneck)}</Text>
       </Stat>
 
       <Stat
@@ -159,10 +169,12 @@ interface ItemsProps {
   label: string;
   icon: React.ReactNode;
   groupBy?: (node: ProductionNode) => string;
-  // how long one pass of the whole line takes. Given, each tally also reads as
-  // a rate: the amounts here are per pass, so per pass over the pass's own
-  // duration is the only per-second reading that cannot contradict them
-  passSeconds?: number;
+  // how often the line turns a pass around once every machine is busy — its
+  // slowest step's cycle, not its critical path. Given, each tally also reads
+  // as a rate: the amounts here are per pass, and a running line hands over one
+  // pass per cycle. The critical path is the FIRST pass's latency, and dividing
+  // by it understates a real line by however many stages deep it is
+  cycleSeconds?: number;
 }
 
 // a Stat whose value is a grouped tally of nodes — "3 Electric Blast Furnace
@@ -173,7 +185,7 @@ const Items = ({
   label,
   icon,
   groupBy = node => node.data.name,
-  passSeconds,
+  cycleSeconds,
 }: ItemsProps) => {
   const items = Object.groupBy(
     nodes.filter(x => x.type === type),
@@ -194,11 +206,11 @@ const Items = ({
                 0,
               ) ?? 0;
 
-            // a line with an unfilled duration has no pass to divide by, and
+            // a line with an unfilled duration has no cycle to divide by, and
             // quoting 0/s for it would read as a measurement
             const rate =
-              passSeconds !== undefined && passSeconds > 0
-                ? total / passSeconds
+              cycleSeconds !== undefined && cycleSeconds > 0
+                ? total / cycleSeconds
                 : undefined;
 
             return (

@@ -1083,24 +1083,33 @@ const recipeTime = (data: RecipeNodeData): number =>
 export interface LineEnergy {
   demand: number; // peak power draw (EU/t) — all recipes assumed concurrent
   time: number; // critical-path duration (seconds)
+  // the slowest single step's cycle, in seconds. What a line RUNNING produces
+  // one pass per, as opposed to `time`, which is how long the first pass takes
+  // to come out the far end: once every machine is busy, nothing waits for the
+  // chain ahead of it — a node starts its next cycle the moment it finishes its
+  // own — so the slowest one alone sets the throughput
+  bottleneck: number;
 }
 
-// peak demand and total runtime for a production line:
+// peak demand and both durations for a production line:
 //   - demand: Σ EU/t over every recipe (each its own machine)
 //   - time: longest dependency chain through the graph (edges = ordering).
 //     independent branches run in parallel; copying a node parallelizes its
 //     runs. node weight = recipeTime; leaf nodes (input/output/byproduct) weigh 0
+//   - bottleneck: the largest of those same node weights, taken on its own
 export const lineEnergy = (
   nodes: ProductionNode[],
   edges: Edge[],
 ): LineEnergy => {
   let demand = 0;
+  let bottleneck = 0;
 
   const weight = new Map<string, number>();
   for (const node of nodes) {
     if (node.type === 'recipeNode') {
       demand += recipePower(node.data);
       weight.set(node.id, recipeTime(node.data));
+      bottleneck = Math.max(bottleneck, recipeTime(node.data));
       continue;
     }
 
@@ -1110,6 +1119,14 @@ export const lineEnergy = (
     if (node.type === 'lineNode') {
       demand += node.data.capture.demand;
       weight.set(node.id, node.data.capture.time * node.data.multiplier);
+      // the machines inside it keep running concurrently too, so what limits
+      // the parent is the sub-line's own slowest step, not its critical path.
+      // A capture taken before that was recorded has only the critical path
+      bottleneck = Math.max(
+        bottleneck,
+        (node.data.capture.bottleneck ?? node.data.capture.time) *
+          node.data.multiplier,
+      );
     }
   }
 
@@ -1121,7 +1138,7 @@ export const lineEnergy = (
     list.push(edge.target);
   }
 
-  return { demand, time: longestPath(successors, weight, nodes) };
+  return { demand, time: longestPath(successors, weight, nodes), bottleneck };
 };
 
 // longest path ending-inclusive at each node, memoized; `visiting` guards
@@ -1229,6 +1246,7 @@ export interface LineMetrics {
   byproducts: Entry[];
   machines: MachineEntry[];
   time: number; // critical-path seconds
+  bottleneck: number; // slowest single step, in seconds — what throughput is per
   demand: number; // peak EU/t
   // recipes missing the EU or the duration every figure here is built from. A
   // line with any of these has holes in `demand` and `time`, and printing the
@@ -1282,8 +1300,16 @@ export const captureLine = (
   nodes: ProductionNode[],
   edges: Edge[],
 ): LineCapture => {
-  const { inputs, outputs, byproducts, machines, time, demand, incomplete } =
-    lineMetrics(nodes, edges);
+  const {
+    inputs,
+    outputs,
+    byproducts,
+    machines,
+    time,
+    bottleneck,
+    demand,
+    incomplete,
+  } = lineMetrics(nodes, edges);
 
   return {
     inputs: toPorts(inputs),
@@ -1297,6 +1323,7 @@ export const captureLine = (
     })),
     demand,
     time,
+    bottleneck,
     incomplete,
   };
 };
@@ -1353,7 +1380,16 @@ export const lineMetrics = (
     else if (node.type === 'lineNode')
       incomplete += node.data.capture.incomplete;
 
-  const { demand, time } = lineEnergy(synced, edges);
+  const { demand, time, bottleneck } = lineEnergy(synced, edges);
 
-  return { inputs, outputs, byproducts, machines, time, demand, incomplete };
+  return {
+    inputs,
+    outputs,
+    byproducts,
+    machines,
+    time,
+    bottleneck,
+    demand,
+    incomplete,
+  };
 };
