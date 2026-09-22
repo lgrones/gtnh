@@ -4,7 +4,6 @@ import {
   IconArrowBigUpLines,
   IconBolt,
   IconClock,
-  IconHourglass,
   IconRecycle,
   IconSettings,
 } from '@tabler/icons-react';
@@ -44,7 +43,7 @@ export const StatsPanel = () => {
   // the machine tally comes from here rather than off the nodes directly,
   // because a collapsed sub-line's machines are real builds too and only
   // `lineMetrics` knows to unpack them
-  const { time, bottleneck, machines } = useMemo(
+  const { bottleneck, machines } = useMemo(
     () => lineMetrics(nodes, edges),
     [nodes, edges],
   );
@@ -104,17 +103,8 @@ export const StatsPanel = () => {
       />
 
       <Stat
-        label="Process time (critical path)"
-        icon={<IconClock size={16} color="var(--mantine-color-blue-filled)" />}
-      >
-        <Text>{formatDuration(time)}</Text>
-      </Stat>
-
-      <Stat
         label="Cycle time (slowest step)"
-        icon={
-          <IconHourglass size={16} color="var(--mantine-color-blue-filled)" />
-        }
+        icon={<IconClock size={16} color="var(--mantine-color-blue-filled)" />}
       >
         <Text>{formatDuration(bottleneck)}</Text>
       </Stat>
