@@ -33,3 +33,6 @@ emulator-data/
 *.sln
 *.sw?
 .tanstack
+
+# dev only
+.gt-cache

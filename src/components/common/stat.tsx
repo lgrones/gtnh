@@ -31,10 +31,12 @@ type StatProps =
     });
 
 export const Stat = ({ icon, color, label, value, children }: StatProps) => (
-  <Group gap="xs" align="start">
+  <Group gap="xs" align="start" wrap="nowrap">
     {icon ?? <Box w={12} h={12} bg={color} style={{ borderRadius: '50%' }} />}
 
-    <Box>
+    {/* the body takes the rest of the row: without this it shrinks to its own
+        content and a right-aligned value column stops short of the panel edge */}
+    <Box flex={1} miw={0}>
       {typeof label === 'string' ? (
         <Text c="dimmed" size="xs" tt="uppercase" fw={600}>
           {label}

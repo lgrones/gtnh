@@ -1,47 +1,54 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_HATCH_AMPS,
   type EnergyHatch,
+  type MultiblockRecipeData,
   type RecipeNodeData,
+  type SingleblockRecipeData,
   type VoltageTier,
 } from '@/contexts/productionStore';
 
 import {
-  hatchPower,
+  basePower,
+  hatchSupply,
+  hatchVoltage,
   overclock,
   recipeTier,
   suppliedPower,
   suppliedTier,
+  tierAbove,
 } from './overclock';
 
-// the wiki's overclock example: 128 EU/t for 60s = 153,600 EU total, fed one
-// tier above the MV it requires
-const recipe = (
-  patch: Partial<RecipeNodeData> & { hatches?: EnergyHatch[] } = {},
-): RecipeNodeData =>
+// Every expectation here was worked through by hand against GT 5.09.51.482
+// before it was written down, the same way the kernel tests were. Where a
+// number came out of the game's own quirks — a truncating long division, a
+// duration floored to whole ticks — the comment says so, because a test that
+// merely records what the code does would have nothing to catch.
+
+const hatch = (
+  tier: VoltageTier,
+  count = 1,
+  amps = DEFAULT_HATCH_AMPS,
+): EnergyHatch => ({ tier, count, amps });
+
+const multi = (patch: Partial<MultiblockRecipeData> = {}): RecipeNodeData =>
   ({
     name: 'Recipe',
     kind: 'multi',
-    machine: 'Vacuum Freezer', // imperfect
+    machine: 'Vacuum Freezer',
     inputs: [],
     outputs: [],
-    hatches: [{ tier: 'HV', count: 1 }],
+    hatches: [hatch('HV')],
+    amperage: 1,
     multiplier: 1,
+    // 128 EU/t over 1,200 ticks
     eu: 153600,
     time: 60,
     ...patch,
   }) as RecipeNodeData;
 
-// one group of identical hatches, the normal build
-const fed = (tier: VoltageTier, count = 1) => ({ hatches: [{ tier, count }] });
-
-// a singleblock is powered by its own tier, never by hatches
-const singleblock = (
-  patch: {
-    voltage?: VoltageTier;
-    amperage?: number;
-  } & Partial<RecipeNodeData> = {},
-): RecipeNodeData =>
+const single = (patch: Partial<SingleblockRecipeData> = {}): RecipeNodeData =>
   ({
     name: 'Recipe',
     kind: 'single',
@@ -51,323 +58,533 @@ const singleblock = (
     voltage: 'HV',
     amperage: 1,
     multiplier: 1,
-    eu: 153600,
-    time: 60,
+    // 30 EU/t over 200 ticks
+    eu: 6000,
+    time: 10,
     ...patch,
   }) as RecipeNodeData;
 
 describe('tier lookup', () => {
   it('maps a recipe to the lowest tier that can carry it', () => {
-    expect(recipeTier(128)).toBe('MV');
-    expect(recipeTier(129)).toBe('HV');
     expect(recipeTier(8)).toBe('ULV');
+    expect(recipeTier(32)).toBe('LV');
+    expect(recipeTier(33)).toBe('MV');
+    expect(recipeTier(1e12)).toBe('MAX');
   });
 
-  it('sums a multiblock hatches, so 4 LV hatches is 1A of MV', () => {
-    expect(hatchPower([{ tier: 'LV', count: 4 }])).toBe(128);
-    expect(suppliedTier(hatchPower([{ tier: 'LV', count: 4 }]))).toBe('MV');
+  it('maps a supply to the highest tier it fully covers', () => {
+    expect(suppliedTier(31)).toBe('ULV');
+    expect(suppliedTier(32)).toBe('LV');
+    expect(suppliedTier(127)).toBe('LV');
   });
 
-  it('sums mixed hatch tiers', () => {
-    expect(
-      hatchPower([
-        { tier: 'LV', count: 2 },
-        { tier: 'MV', count: 1 },
-      ]),
-    ).toBe(192);
+  it('walks one step up the ladder and stops at the top', () => {
+    expect(tierAbove('LV')).toBe('MV');
+    expect(tierAbove('MAX')).toBeUndefined();
   });
 
-  it('ignores amperage on a singleblock, which needs a higher tier machine', () => {
-    expect(suppliedPower(singleblock({ voltage: 'LV', amperage: 4 }))).toBe(32);
-  });
-
-  it('reports the highest tier fully covered, not the next one up', () => {
-    expect(suppliedTier(511)).toBe('MV');
-    expect(suppliedTier(512)).toBe('HV');
+  it('turns a recipe total into a draw', () => {
+    expect(basePower(153600, 60)).toBe(128);
+    expect(basePower(100, 0)).toBe(0);
   });
 });
 
-describe('imperfect overclocks', () => {
-  it('halves the time and quadruples the power per step', () => {
-    const result = overclock(recipe());
+// The single correction that matters most: hatch voltages do NOT simply add up
+// into the EU/t a machine may spend. GT keeps three numbers here and the old
+// model conflated them.
+describe('hatchSupply — GT’s three separate quantities', () => {
+  it('gives a lone hatch one amp, per GT’s useSingleAmp rule', () => {
+    expect(hatchSupply([hatch('LV')])).toMatchObject({
+      voltage: 32,
+      amps: 1,
+      eut: 32,
+    });
+  });
 
-    expect(result.mode).toBe('imperfect');
-    expect(result.steps).toBe(1);
+  it('gives two hatches four amps — 2 A each, not one between them', () => {
+    expect(hatchSupply([hatch('LV', 2)])).toMatchObject({
+      voltage: 32,
+      amps: 4,
+      eut: 128,
+    });
+  });
+
+  it('scales with hatch count, so four LV hatches deliver 256 EU/t', () => {
+    // the old model said 128 for this, having summed the voltages
+    expect(hatchSupply([hatch('LV', 4)]).eut).toBe(256);
+  });
+
+  it('averages the voltage across a mixed bank, and floors it', () => {
+    // (32 + 128 + 128) / 3 = 96, and 3 hatches x 2 A = 6
+    const supply = hatchSupply([hatch('LV'), hatch('MV', 2)]);
+    expect(supply.voltage).toBe(96);
+    expect(supply.amps).toBe(6);
+    expect(supply.eut).toBe(576);
+  });
+
+  it('keeps the summed voltage separate — that is what parallel formulas read', () => {
+    expect(hatchVoltage([hatch('LV', 4)])).toBe(128);
+    expect(hatchSupply([hatch('LV', 4)]).maxVoltage).toBe(128);
+  });
+
+  it('does not collapse a lone exotic hatch to one amp', () => {
+    // a laser hatch carries far more than 2 A, and GT's rule asks whether any
+    // exotic hatch is fitted — the amp count is the only signal we have
+    expect(hatchSupply([hatch('UV', 1, 256)])).toMatchObject({
+      amps: 256,
+      eut: 524288 * 256,
+    });
+  });
+
+  it('survives a missing or empty hatch list', () => {
+    expect(hatchSupply(undefined).eut).toBe(0);
+    expect(hatchSupply([]).eut).toBe(0);
+    expect(hatchSupply([hatch('LV', 0)]).eut).toBe(0);
+  });
+
+  it('feeds a singleblock from its own tier at one amp', () => {
+    expect(suppliedPower(single({ voltage: 'HV' }))).toBe(512);
+    expect(suppliedPower(multi({ hatches: [hatch('HV')] }))).toBe(512);
+  });
+});
+
+describe('a plain multiblock', () => {
+  // 128 EU/t against one HV hatch: 512 / 128 = 4, and log4(4) is one overclock
+  it('takes the overclock the power ratio offers', () => {
+    const result = overclock(multi());
+    expect(result.oc.total).toBe(1);
+    expect(result.oc.regular).toBe(1);
     expect(result.power).toBe(512);
     expect(result.time).toBe(30);
+    expect(result.parallels).toBe(1);
+    expect(result.parallel.limitedBy).toBe('machine');
   });
 
-  it('doubles the recipe total energy, as the wiki notes', () => {
-    const result = overclock(recipe());
-    expect(result.power * result.time * 20).toBe(153600 * 2);
+  it('runs at one parallel, because GT’s base class returns 1', () => {
+    const result = overclock(multi());
+    expect(result.machine.name).toBe('Vacuum Freezer');
+    expect(result.parallel.machineCap).toBe(1);
+    expect(result.parallel.powerCap).toBe(4);
   });
 
-  it('applies both steps when fed two tiers above the recipe', () => {
-    const result = overclock(recipe(fed('EV')));
-
-    expect(result.steps).toBe(2);
-    expect(result.power).toBe(128 * 16);
-    expect(result.time).toBe(15);
-  });
-});
-
-describe('perfect overclocks', () => {
-  it('quarters the time and quadruples the power per step', () => {
-    const result = overclock(recipe({ machine: 'Large Chemical Reactor' }));
-
-    expect(result.mode).toBe('perfect');
-    expect(result.steps).toBe(1);
-    expect(result.power).toBe(512);
-    expect(result.time).toBe(15);
-  });
-
-  it('leaves the recipe total energy unchanged', () => {
-    const result = overclock(recipe({ machine: 'Large Chemical Reactor' }));
-    expect(result.power * result.time * 20).toBe(153600);
-  });
-});
-
-describe('singleblock overclocks', () => {
-  it('overclocks off the machine tier, like any other machine', () => {
-    const result = overclock(singleblock());
-
-    expect(result.mode).toBe('imperfect');
-    expect(result.steps).toBe(1);
-    expect(result.power).toBe(512);
-    expect(result.time).toBe(30);
-  });
-
-  it('does not overclock at the recipe tier', () => {
-    const result = overclock(singleblock({ voltage: 'MV' }));
-
-    expect(result.steps).toBe(0);
+  it('leaves the figures as entered when the hatches cannot pay for one recipe', () => {
+    const result = overclock(multi({ hatches: [hatch('LV')] }));
+    expect(result.underpowered).toBe(true);
+    expect(result.ranAsEntered).toBe(true);
     expect(result.power).toBe(128);
     expect(result.time).toBe(60);
-  });
-
-  it('gains nothing from extra amperage', () => {
-    const result = overclock(singleblock({ voltage: 'MV', amperage: 8 }));
-
-    expect(result.steps).toBe(0);
-    expect(result.power).toBe(128);
-  });
-
-  it('never gains parallels — its leftover steps are simply lost', () => {
-    // 1s = 20 ticks; imperfect halving fits 4 steps, 6 tiers are available
-    const result = overclock(singleblock({ eu: 2560, time: 1, voltage: 'UV' }));
-
-    expect(result.steps).toBe(4);
-    expect(result.surplus).toBe(2);
+    expect(result.supply).toBe('LV');
+    expect(result.demand).toBe('MV');
+    // the kernel says nothing runs; the planner still scales item I/O by one,
+    // so an underpowered node does not silently empty the lines below it
+    expect(result.parallel.running).toBe(0);
     expect(result.parallels).toBe(1);
-    expect(result.power).toBe(128 * 4 ** 4);
+  });
+
+  it('calculates nothing for a node with no recipe in it yet', () => {
+    const result = overclock(multi({ eu: 0, time: 0 }));
+    expect(result.ranAsEntered).toBe(true);
+    expect(result.underpowered).toBe(false);
+    expect(result.power).toBe(0);
   });
 });
 
-describe('parallels', () => {
-  // the wiki's Volcanus example, after its 90% energy discount: 1,800 EU/t over
-  // 16s with 8 parallels. run on a perfect machine so one mode covers both steps
-  const volcanus = (patch: Partial<RecipeNodeData> = {}) =>
-    recipe({
-      machine: 'Large Chemical Reactor',
-      eu: 1800 * 16 * 20,
-      time: 16,
-      parallels: 8,
-      ...patch,
+// The biggest correction to the old model. Overclocks past the one-tick floor
+// are not wasted: ParallelHelper multiplies the machine's cap by them.
+describe('sub-tick parallels', () => {
+  // 32 EU/t over 20 ticks on one UV hatch. 524,288 / 32 is 16,384 = 4^7, and
+  // seven overclocks against a 20 tick recipe leave a x7 multiplier
+  const subTick = multi({ hatches: [hatch('UV')], eu: 640, time: 1 });
+
+  it('turns overclocks the tick floor cannot spend into parallels', () => {
+    const result = overclock(subTick);
+    expect(result.parallel.subTick).toBe(7);
+    expect(result.parallel.effectiveCap).toBe(7);
+    expect(result.parallels).toBe(7);
+  });
+
+  it('counts none of them as wasted — the machine ran them as parallels', () => {
+    const result = overclock(subTick);
+    expect(result.oc.wasted).toBe(0);
+    expect(result.oc.floored).toBe(0);
+  });
+
+  it('re-overclocks against the parallel draw, and floors at one tick', () => {
+    const result = overclock(subTick);
+    // 32 x 7 = 224 EU/t of recipe, which only leaves five overclocks
+    expect(result.oc.total).toBe(5);
+    expect(result.power).toBe(229376);
+    expect(result.durationTicks).toBe(1);
+    expect(result.power).toBeLessThanOrEqual(result.availableEUt);
+  });
+});
+
+describe('Volcanus — the full modifier stack', () => {
+  // 480 EU/t over 100 ticks on one IV hatch, Cupronickel coils (1,801 K)
+  // against a 0 K recipe: two 900 K discount steps
+  const volcanus = multi({
+    machine: 'Volcanus',
+    hatches: [hatch('IV')],
+    eu: 480 * 100,
+    time: 5,
+  });
+
+  it('runs its declared eight parallels', () => {
+    const result = overclock(volcanus);
+    expect(result.parallel.machineCap).toBe(8);
+    expect(result.parallels).toBe(8);
+    expect(result.parallel.limitedBy).toBe('machine');
+  });
+
+  it('gets no overclock at all, because the long division truncates to 2', () => {
+    const result = overclock(volcanus);
+    // 480 x 8 x 0.9 x 0.95^2 = 3,119.04, and 8,192 / 3,119 is 2 by integer
+    // division. log4(2) is 0 — four times the draw is not a tier of headroom
+    expect(result.heat.discounts).toBe(2);
+    expect(result.oc.available).toBe(0);
+    expect(result.oc.total).toBe(0);
+    expect(result.power).toBe(3120); // GT ceils what it charges
+  });
+
+  it('applies its 1/2.2 duration modifier before anything else', () => {
+    // 100 / 2.2 = 45.45 ticks, truncated
+    expect(overclock(volcanus).durationTicks).toBe(45);
+  });
+});
+
+describe('a parallel formula read off the hatches', () => {
+  // 6 x tier, and `tier` is the SUMMED hatch voltage: 4 EV hatches sum to
+  // 8,192, which is IV, which GT numbers 5
+  const centrifuge = multi({
+    machine: 'Industrial Centrifuge',
+    hatches: [hatch('EV', 4)],
+    eu: 6000,
+    time: 10,
+  });
+
+  it('reads the summed voltage, not the average the calculator is fed', () => {
+    const result = overclock(centrifuge);
+    expect(result.parallel.machineCap).toBe(30);
+    expect(result.availableEUt).toBe(16384); // 2,048 average x 8 A
+    expect(result.parallels).toBe(30);
+  });
+
+  it('spends the headroom the parallel draw leaves', () => {
+    const result = overclock(centrifuge);
+    // 30 x 30 x 0.9 = 810 EU/t, and 16,384 / 810 is 20, so log4 gives 2
+    expect(result.oc.total).toBe(2);
+    expect(result.power).toBe(12960);
+    // 200 / 2.25 = 88.88 ticks, then two halvings
+    expect(result.durationTicks).toBe(22);
+  });
+
+  it('honours a ceiling set on the node', () => {
+    const result = overclock(
+      multi({
+        machine: 'Industrial Centrifuge',
+        hatches: [hatch('EV', 4)],
+        eu: 6000,
+        time: 10,
+        parallelLimit: 5,
+      }),
+    );
+    expect(result.parallels).toBe(5);
+    expect(result.parallel.limitedBy).toBe('node');
+  });
+});
+
+describe('a perfect-overclock machine', () => {
+  // the LCR sets durationDecreasePerOC to 4: same 4x power, four times the
+  // speed, which is what makes its total energy cost flat
+  const lcr = multi({
+    machine: 'Large Chemical Reactor',
+    hatches: [hatch('HV')],
+    eu: 6000,
+    time: 10,
+  });
+
+  it('quarters the duration per overclock instead of halving it', () => {
+    const result = overclock(lcr);
+    expect(result.machine.durationDecreasePerOC).toBe(4);
+    expect(result.oc.total).toBe(2);
+    expect(result.power).toBe(480);
+    expect(result.durationTicks).toBe(12); // 200 / 16 = 12.5, truncated
+  });
+
+  it('costs the same total energy as it did unoverclocked', () => {
+    const result = overclock(lcr);
+    // 30 x 200 = 6,000 EU, and 480 x 12.5 is the same — the truncation to 12
+    // whole ticks is the only difference, and it is the game's
+    expect(result.power * 12.5).toBe(6000);
+  });
+});
+
+describe('the EBF — heat discounts and heat overclocks off one surplus', () => {
+  // HSS-G coils at 5,401 K, plus GT's 100 K per tier above MV, on one IV
+  // hatch: 5,401 + 100 x (5 - 2) = 5,701 K against an 1,800 K recipe
+  const ebf = multi({
+    machine: 'Electric Blast Furnace',
+    hatches: [hatch('IV')],
+    config: { coil: 'hss_g' },
+    recipeHeat: 1800,
+    eu: 120 * 600,
+    time: 30,
+  });
+
+  it('derives the machine heat from the coil and the hatch tier', () => {
+    expect(overclock(ebf).heat.machine).toBe(5701);
+  });
+
+  it('takes four 900 K discounts and two 1,800 K overclocks from 3,901 K', () => {
+    const result = overclock(ebf);
+    expect(result.heat.discounts).toBe(4);
+    expect(result.oc.heat).toBe(2);
+    expect(result.oc.regular).toBe(1);
+  });
+
+  it('charges every overclock but quarters the duration for the heat ones', () => {
+    const result = overclock(ebf);
+    // 120 x 0.95^4 = 97.74, then 4^3; the duration takes 4^2 then 2^1
+    expect(result.power).toBe(6256);
+    expect(result.durationTicks).toBe(18); // 600 / 16 / 2 = 18.75, truncated
+  });
+
+  it('leaves a colder machine’s figures exactly as entered', () => {
+    // GT would never match the recipe at all, and the kernel's heat divisions
+    // go negative below it — so the facade gates what the kernel faithfully
+    // does not
+    const cold = overclock(
+      multi({
+        machine: 'Electric Blast Furnace',
+        hatches: [hatch('IV')],
+        config: { coil: 'cupronickel' },
+        recipeHeat: 9000,
+        eu: 120 * 600,
+        time: 30,
+      }),
+    );
+    expect(cold.underheated).toBe(true);
+    expect(cold.ranAsEntered).toBe(true);
+    expect(cold.heat.sufficient).toBe(false);
+    expect(cold.power).toBe(120);
+    expect(cold.durationTicks).toBe(600);
+  });
+
+  it('falls back to the declared default coil when the config is empty', () => {
+    const result = overclock(
+      multi({
+        machine: 'Electric Blast Furnace',
+        hatches: [hatch('IV')],
+        recipeHeat: 1800,
+        eu: 120 * 600,
+        time: 30,
+      }),
+    );
+    // Cupronickel, 1,801 + 300
+    expect(result.heat.machine).toBe(2101);
+  });
+});
+
+describe('a machine the catalog has never heard of', () => {
+  const stranger = multi({ machine: 'Ender Quarry' });
+
+  it('says so rather than pretending', () => {
+    const result = overclock(stranger);
+    expect(result.machine.known).toBe(false);
+    expect(result.machine.notes).toContain('Not in the machine catalog');
+  });
+
+  it('still runs GT’s plain rules at one parallel', () => {
+    const result = overclock(stranger);
+    expect(result.parallel.machineCap).toBe(1);
+    expect(result.oc.total).toBe(1);
+    expect(result.power).toBe(512);
+  });
+
+  it('resolves a name by alias and by loose spelling', () => {
+    expect(overclock(multi({ machine: 'LCR' })).machine.name).toBe(
+      'Large Chemical Reactor',
+    );
+    expect(overclock(multi({ machine: 'vacuum  freezer' })).machine.name).toBe(
+      'Vacuum Freezer',
+    );
+  });
+});
+
+// Decision 8: this is where the live data actually is, and single blocks never
+// touch ParallelHelper or the catalog.
+describe('a singleblock', () => {
+  it('overclocks against its own tier at one amp', () => {
+    const result = overclock(single());
+    // 512 / max(30, 32) = 16, so two overclocks
+    expect(result.oc.total).toBe(2);
+    expect(result.power).toBe(480);
+    expect(result.durationTicks).toBe(50); // 200 / 2^2
+    expect(result.parallels).toBe(1);
+  });
+
+  it('never runs parallels, whatever tier it is', () => {
+    const result = overclock(single({ voltage: 'UV' }));
+    expect(result.parallel.machineCap).toBe(1);
+    expect(result.parallel.subTick).toBe(1);
+    expect(result.parallels).toBe(1);
+  });
+
+  it('is capped by voltage tiers, because it does not overclock across amps', () => {
+    // 2,048 / max(30, 32) = 64, which log4 reads as three overclocks, but an
+    // EV machine sits only three tiers above a 30 EU/t recipe's LV
+    const result = overclock(single({ voltage: 'EV' }));
+    expect(result.oc.available).toBe(3);
+    expect(result.oc.total).toBe(3);
+    expect(result.oc.clampedBy).toBe('none');
+  });
+
+  it('counts the overclocks the one tick floor swallows as pure waste', () => {
+    // 128 EU/t over 20 ticks on UV: six overclocks are charged for, and the
+    // duration reaches the floor after five. a multiblock would have turned
+    // the sixth into a parallel; a singleblock just pays for it
+    const result = overclock(single({ voltage: 'UV', eu: 2560, time: 1 }));
+    expect(result.oc.total).toBe(6);
+    expect(result.oc.floored).toBe(1);
+    expect(result.parallel.subTick).toBe(1);
+    expect(result.durationTicks).toBe(1);
+  });
+
+  it('reports being underpowered rather than overclocking backwards', () => {
+    // 64 EU/t in an LV machine, which can only deliver 32
+    const result = overclock(single({ voltage: 'LV', eu: 12800, time: 10 }));
+    expect(result.underpowered).toBe(true);
+    expect(result.power).toBe(64);
+    expect(result.durationTicks).toBe(200);
+  });
+
+  it('is never reported as an unmodelled machine', () => {
+    const result = overclock(single({ machine: 'Not A Real Machine' }));
+    expect(result.machine.known).toBe(true);
+    expect(result.machine.modeled).toBe(true);
+  });
+});
+
+describe('memoisation', () => {
+  it('returns the same object for the same node data', () => {
+    const data = multi();
+    expect(overclock(data)).toBe(overclock(data));
+  });
+
+  it('recomputes for a new object with the same contents', () => {
+    expect(overclock(multi())).not.toBe(overclock(multi()));
+    expect(overclock(multi()).power).toBe(overclock(multi()).power);
+  });
+});
+
+describe('the Industrial Coke Oven — casings for parallels, tier for the discount', () => {
+  // `6 + tier * 12` off the casing the player built, and an EU modifier of
+  // `(100 - voltageTier * 4) / 100` off the summed hatch voltage
+  const ico = (
+    cokeOvenCasing: number,
+    hatches: EnergyHatch[],
+  ): RecipeNodeData =>
+    multi({
+      machine: 'Industrial Coke Oven',
+      hatches,
+      config: { cokeOvenCasing },
+      // 16 EU/t over 100 ticks
+      eu: 1600,
+      time: 5,
     });
 
-  it('multiplies power by the parallel count without changing the duration', () => {
-    // 8 EV hatches = 16,384 EU/t: enough for 8 parallels, not to overclock
-    const result = overclock(volcanus(fed('EV', 8)));
+  it.each([
+    ['Heat Resistant', 1, 18],
+    ['Heat Proof', 2, 30],
+  ])('runs %s casings at %i parallels', (_what, casing, expected) => {
+    expect(overclock(ico(casing, [hatch('HV')])).parallel.machineCap).toBe(
+      expected,
+    );
+  });
 
+  it('takes 4% off per voltage tier of the summed hatch voltage', () => {
+    // one HV hatch is 512, which GT numbers tier 3
+    expect(overclock(ico(1, [hatch('HV')])).modifiers.eut).toBeCloseTo(0.88);
+    // four of them sum to 2,048 — EV, tier 4
+    expect(overclock(ico(1, [hatch('HV', 4)])).modifiers.eut).toBeCloseTo(0.84);
+  });
+
+  it('asks which casing the player built before it answers', () => {
+    const unset = overclock(
+      multi({
+        machine: 'Industrial Coke Oven',
+        hatches: [hatch('HV')],
+        eu: 1600,
+        time: 5,
+      }),
+    );
+    expect(unset.machine.parameters.map(param => param.id)).toEqual([
+      'cokeOvenCasing',
+    ]);
+    // the default is the lower casing, and the node raises `incomplete`
+    expect(unset.parallel.machineCap).toBe(18);
+  });
+});
+
+describe('the Industrial Maceration Stack — a parallel model with an upgrade in it', () => {
+  // `Math.max(1, (controllerTier == 1 ? 2 : 8) * tTier)` where tTier is the
+  // summed hatch voltage's tier, so the parallel count is the wiki's table
+  const ims = (
+    controllerTier: number,
+    hatches: EnergyHatch[],
+  ): RecipeNodeData =>
+    multi({
+      machine: 'Industrial Maceration Stack',
+      hatches,
+      config: { controllerTier },
+      // 2 EU/t over 400 ticks — the ore-processing macerator recipe
+      eu: 800,
+      time: 20,
+    });
+
+  it.each([
+    ['T1 on LV', 1, 'LV' as const, 2],
+    ['T1 on EV', 1, 'EV' as const, 8],
+    ['T2 on LV', 2, 'LV' as const, 8],
+    ['T2 on EV', 2, 'EV' as const, 32],
+    ['T2 on UV', 2, 'UV' as const, 64],
+  ])('gives %s %i parallels', (_what, controllerTier, tier, expected) => {
+    // one hatch, so the sum and the average agree and the tier is the hatch's
+    expect(
+      overclock(ims(controllerTier, [hatch(tier)])).parallel.machineCap,
+    ).toBe(expected);
+  });
+
+  it('reads the summed voltage, so four EV hatches are an IV machine', () => {
+    // 4 x 2,048 = 8,192, which GT numbers tier 5, so 8 x 5
+    expect(overclock(ims(2, [hatch('EV', 4)])).parallel.machineCap).toBe(40);
+  });
+
+  it('runs 1.6x faster and takes ordinary overclocks', () => {
+    // 8 parallels of 2 EU/t is 16, and one EV hatch delivers 2,048 at 1 A,
+    // so log4(128) is 3 overclocks
+    const result = overclock(ims(1, [hatch('EV')]));
     expect(result.parallels).toBe(8);
-    expect(result.steps).toBe(0);
-    expect(result.power).toBe(8 * 1800);
-    expect(result.time).toBe(16);
+    expect(result.oc.total).toBe(3);
+    expect(result.power).toBe(1024); // 16 x 4^3
+    // 400 / 1.6 = 250, then three halvings — 31.25 truncated
+    expect(result.durationTicks).toBe(31);
   });
 
-  it('keeps the total energy per recipe unchanged, unlike an imperfect step', () => {
-    const one = overclock(volcanus({ ...fed('EV', 8), parallels: 1 }));
-    const eight = overclock(volcanus(fed('EV', 8)));
-
-    const perRecipe = (x: ReturnType<typeof overclock>) =>
-      (x.power * x.time) / x.parallels;
-    expect(perRecipe(eight)).toBe(perRecipe(one));
-  });
-
-  it('follows base x parallels x 4^oc once there is power for both', () => {
-    const result = overclock(volcanus(fed('UV')));
-
-    expect(result.parallels).toBe(8);
-    expect(result.steps).toBe(2);
-    expect(result.power).toBe(1800 * 8 * 4 ** 2);
-    expect(result.time).toBe(1);
-  });
-
-  it('runs only as many parallels as the supply can power', () => {
-    // 3 EV hatches = 6,144 EU/t, which covers three of the eight offered
-    const result = overclock(volcanus(fed('EV', 3)));
-
-    expect(result.parallels).toBe(3);
-    expect(result.power).toBe(3 * 1800);
-  });
-
-  it('reports the entered count alongside the affordable one', () => {
-    const capped = overclock(volcanus(fed('EV', 3)));
-    expect(capped.offeredParallels).toBe(8);
-    expect(capped.parallels).toBe(3);
-
-    const paid = overclock(volcanus(fed('EV', 8)));
-    expect(paid.offeredParallels).toBe(8);
-    expect(paid.parallels).toBe(8);
-  });
-
-  it('never runs more parallels than the node was told to, however fed', () => {
-    // 1s = 20 ticks at 128 EU/t against a UV hatch: four steps fit the
-    // duration and two more are affordable, but one parallel is one parallel.
-    // spare power cannot conjure the items a second concurrent recipe eats
-    const result = overclock(
-      recipe({ eu: 2560, time: 1, parallels: 1, ...fed('UV') }),
+  it('asks which tier the controller is before it answers', () => {
+    const unset = overclock(
+      multi({
+        machine: 'Industrial Maceration Stack',
+        hatches: [hatch('EV')],
+        eu: 800,
+        time: 20,
+      }),
     );
-
-    expect(result.parallels).toBe(1);
-    expect(result.steps).toBe(4);
-    expect(result.surplus).toBe(2);
-    expect(result.power).toBe(128 * 4 ** 4);
-  });
-
-  it('runs the entered parallels and reports the steps it could not use', () => {
-    // the same node at four parallels: they are bought up front at 1x power
-    // each, which is what raises the recipe to HV and eats an overclock step
-    const result = overclock(
-      recipe({ eu: 2560, time: 1, parallels: 4, ...fed('UV') }),
-    );
-
-    expect(result.parallels).toBe(4);
-    expect(result.recipe).toBe('HV');
-    expect(result.steps).toBe(4);
-    expect(result.surplus).toBe(1);
-    expect(result.power).toBe(128 * 4 * 4 ** 4);
-  });
-});
-
-describe('machines that do not overclock', () => {
-  it('leaves a `none` machine untouched', () => {
-    const result = overclock(recipe({ machine: 'TFFT' }));
-
-    expect(result.mode).toBe('none');
-    expect(result.steps).toBe(0);
-    expect(result.power).toBe(128);
-    expect(result.time).toBe(60);
-  });
-
-  it('leaves a `unique` machine at the values the user entered', () => {
-    const result = overclock(recipe({ machine: 'Eye of Harmony' }));
-
-    expect(result.mode).toBe('unique');
-    expect(result.steps).toBe(0);
-    expect(result.time).toBe(60);
-  });
-
-  it('ignores parallels on a machine that cannot overclock', () => {
-    const result = overclock(recipe({ machine: 'TFFT', parallels: 8 }));
-    expect(result.parallels).toBe(1);
-  });
-});
-
-describe('mixed machines', () => {
-  it('defaults to imperfect', () => {
-    const result = overclock(recipe({ machine: 'Electric Blast Furnace' }));
-
-    expect(result.mode).toBe('imperfect');
-    expect(result.time).toBe(30);
-  });
-
-  it('honours a per-node perfect override', () => {
-    const result = overclock(
-      recipe({ machine: 'Electric Blast Furnace', overclock: 'perfect' }),
-    );
-
-    expect(result.mode).toBe('perfect');
-    expect(result.time).toBe(15);
-  });
-
-  it('ignores the override on a machine that is not mixed', () => {
-    const result = overclock(recipe({ overclock: 'perfect' }));
-
-    expect(result.mode).toBe('imperfect');
-    expect(result.time).toBe(30);
-  });
-});
-
-describe('underpowered machines', () => {
-  it('flags a supply that cannot even run the recipe unoverclocked', () => {
-    const result = overclock(recipe(fed('LV'))); // 32 EU/t
-
-    expect(result.underpowered).toBe(true);
-    expect(result.steps).toBe(0);
-    expect(result.parallels).toBe(1);
-    expect(result.power).toBe(128);
-  });
-
-  it('does not flag a supply that exactly meets the requirement', () => {
-    const result = overclock(recipe(fed('MV')));
-
-    expect(result.underpowered).toBe(false);
-    expect(result.steps).toBe(0);
-  });
-});
-
-describe('machines outside the catalog', () => {
-  it('assumes imperfect, the standard behaviour of most multiblocks', () => {
-    const result = overclock(recipe({ machine: 'Some Modded Multi' }));
-
-    expect(result.mode).toBe('imperfect');
-    expect(result.steps).toBe(1);
-  });
-});
-
-describe('amperage only overclocks when it reaches a tier', () => {
-  // 30 EU/t base with 5 parallels draws 150 EU/t, an HV requirement
-  const parallel = (patch: Partial<RecipeNodeData> = {}) =>
-    recipe({ eu: 30 * 10 * 20, time: 10, parallels: 5, ...patch });
-
-  it('does not overclock on 2 HV hatches — 1,024 EU/t is still HV', () => {
-    const result = overclock(parallel(fed('HV', 2)));
-
-    expect(result.parallels).toBe(5);
-    expect(result.recipe).toBe('HV');
-    expect(result.supplied).toBe('HV'); // 1,024 does not reach EV's 2,048
-    expect(result.steps).toBe(0);
-    expect(result.power).toBe(150);
-  });
-
-  it('overclocks on 4 HV hatches, which do reach EV', () => {
-    const result = overclock(parallel(fed('HV', 4)));
-
-    expect(result.supplied).toBe('EV');
-    expect(result.steps).toBe(1);
-    expect(result.power).toBe(600);
-    expect(result.time).toBe(5);
-  });
-
-  it('reproduces the EBF trick: 4 LV hatches are exactly 1A of MV', () => {
-    const result = overclock(
-      recipe({ eu: 32 * 10 * 20, time: 10, ...fed('LV', 4) }),
-    );
-
-    expect(result.supplied).toBe('MV');
-    expect(result.recipe).toBe('LV');
-    expect(result.steps).toBe(1);
-  });
-});
-
-describe('recipe amperage', () => {
-  it('never affects a multiblock overclock — hatches decide the supply', () => {
-    const plain = overclock(recipe({ amperage: 1 }));
-    const heavy = overclock(recipe({ amperage: 3 }));
-
-    expect(heavy.steps).toBe(plain.steps);
-    expect(heavy.power).toBe(plain.power);
-    expect(heavy.supplied).toBe(plain.supplied);
+    expect(unset.machine.parameters.map(param => param.id)).toEqual([
+      'controllerTier',
+    ]);
+    // an unset required parameter falls back to the default, and the node
+    // raises `incomplete` rather than the engine inventing a number
+    expect(unset.parallel.machineCap).toBe(8);
   });
 });
