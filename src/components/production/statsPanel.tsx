@@ -12,6 +12,7 @@ import { useMemo } from 'react';
 import {
   lineMetrics,
   machineAmps,
+  steadyRates,
   useProductionStore,
   type MachineEntry,
   type ProductionNode,
@@ -48,12 +49,16 @@ export const StatsPanel = () => {
     [nodes, edges],
   );
 
+  // the per-second figures are a flow, settled between the machines, rather
+  // than a pass's amounts over a pass's duration — see `steadyRates`
+  const { leaves } = useMemo(() => steadyRates(nodes, edges), [nodes, edges]);
+
   return (
     <Panel title="Statistics">
       <Items
         label="Inputs"
         nodes={nodes}
-        cycleSeconds={bottleneck}
+        rates={leaves}
         type="inputNode"
         icon={
           <IconArrowBigUpLines
@@ -66,7 +71,7 @@ export const StatsPanel = () => {
       <Items
         label="Outputs"
         nodes={nodes}
-        cycleSeconds={bottleneck}
+        rates={leaves}
         type="outputNode"
         icon={
           <IconArrowBigDownLines
@@ -79,7 +84,7 @@ export const StatsPanel = () => {
       <Items
         label="Byproducts"
         nodes={nodes}
-        cycleSeconds={bottleneck}
+        rates={leaves}
         type="byproductNode"
         icon={
           <IconRecycle size={16} color="var(--mantine-color-orange-filled)" />
@@ -159,12 +164,11 @@ interface ItemsProps {
   label: string;
   icon: React.ReactNode;
   groupBy?: (node: ProductionNode) => string;
-  // how often the line turns a pass around once every machine is busy — its
-  // slowest step's cycle, not its critical path. Given, each tally also reads
-  // as a rate: the amounts here are per pass, and a running line hands over one
-  // pass per cycle. The critical path is the FIRST pass's latency, and dividing
-  // by it understates a real line by however many stages deep it is
-  cycleSeconds?: number;
+  // per leaf node, what it carries per second once the line is running. Read
+  // off `steadyRates` rather than divided out of the tally: the amounts here
+  // are one pass's worth, and a pass is a ratio the line is written in, not
+  // something every machine waits for
+  rates?: Map<string, number>;
 }
 
 // a Stat whose value is a grouped tally of nodes — "3 Electric Blast Furnace
@@ -175,7 +179,7 @@ const Items = ({
   label,
   icon,
   groupBy = node => node.data.name,
-  cycleSeconds,
+  rates,
 }: ItemsProps) => {
   const items = Object.groupBy(
     nodes.filter(x => x.type === type),
@@ -196,12 +200,15 @@ const Items = ({
                 0,
               ) ?? 0;
 
-            // a line with an unfilled duration has no cycle to divide by, and
-            // quoting 0/s for it would read as a measurement
-            const rate =
-              cycleSeconds !== undefined && cycleSeconds > 0
-                ? total / cycleSeconds
-                : undefined;
+            // a leaf nothing is wired into has no flow to report, and quoting
+            // 0/s for it would read as a measurement
+            const measured = nodes?.filter(node => rates?.has(node.id)) ?? [];
+            const rate = measured.length
+              ? measured.reduce(
+                  (acc, node) => acc + (rates?.get(node.id) ?? 0),
+                  0,
+                )
+              : undefined;
 
             return (
               <Text key={name}>

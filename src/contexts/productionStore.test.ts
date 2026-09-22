@@ -13,6 +13,7 @@ import {
   machineTier,
   normalizeNodes,
   lineMetrics,
+  steadyRates,
   demandByTier,
   recipePower,
   useProductionStore,
@@ -2700,5 +2701,152 @@ describe('validateGraph against a loop an input node tops up', () => {
         demand: 4,
       }),
     );
+  });
+});
+
+describe('steadyRates — what a running line actually moves', () => {
+  // a recipe node making `out` of an item every `seconds`, at a draw low
+  // enough that nothing overclocks
+  const maker = (name: string, quantity: number, seconds: number) => {
+    const id = addNode('recipeNode');
+    state().renameNode(id, name);
+    const handle = addOutput(id);
+    state().updateRecipeOutput(id, handle, { name: 'Ore', quantity });
+    state().updateRecipe(id, { eu: 6 * seconds, time: seconds });
+    return { id, handle };
+  };
+
+  // a recipe node eating `quantity` Ore and handing back one Plate
+  const eater = (name: string, quantity: number, seconds: number) => {
+    const id = addNode('recipeNode');
+    state().renameNode(id, name);
+    const input = addInput(id);
+    state().updateRecipeInput(id, input, { name: 'Ore', quantity });
+    const output = addOutput(id);
+    state().updateRecipeOutput(id, output, { name: 'Plate', quantity: 1 });
+    state().updateRecipe(id, { eu: 6 * seconds, time: seconds });
+    return { id, input, output };
+  };
+
+  const sink = (source: string, handle: string) => {
+    const id = addNode('outputNode');
+    state().onConnect({
+      source,
+      target: id,
+      sourceHandle: handle,
+      targetHandle: null,
+    });
+    return id;
+  };
+
+  const wire = (
+    from: { id: string; handle: string },
+    to: { id: string; input: string },
+  ) =>
+    state().onConnect({
+      source: from.id,
+      target: to.id,
+      sourceHandle: from.handle,
+      targetHandle: to.input,
+    });
+
+  it('runs a consumer at its own capacity when it is fed enough', () => {
+    const a = maker('A', 10, 5); // 2 Ore/s
+    const b = eater('B', 10, 10); // wants 1 Ore/s, makes 0.1 Plate/s
+    wire(a, b);
+    const plates = sink(b.id, b.output);
+
+    const { leaves } = steadyRates(state().nodes, state().edges);
+    expect(leaves.get(plates)).toBeCloseTo(0.1);
+  });
+
+  it('holds a consumer down to what reaches it', () => {
+    const a = maker('A', 1, 10); // 0.1 Ore/s
+    const b = eater('B', 1, 1); // could eat 1 Ore/s
+    wire(a, b);
+    const plates = sink(b.id, b.output);
+
+    // starved to a tenth of its machine's capacity
+    expect(
+      steadyRates(state().nodes, state().edges).leaves.get(plates),
+    ).toBeCloseTo(0.1);
+  });
+
+  it('leaves a sink the part of an output no recipe takes', () => {
+    const a = maker('A', 10, 5); // 2 Ore/s
+    const b = eater('B', 10, 10); // takes 1 Ore/s
+    wire(a, b);
+    const spare = sink(a.id, a.handle);
+
+    expect(
+      steadyRates(state().nodes, state().edges).leaves.get(spare),
+    ).toBeCloseTo(1);
+  });
+
+  it('is unmoved by a multiplier, which is a ratio and not a rate', () => {
+    const a = maker('A', 10, 5);
+    const b = eater('B', 10, 10);
+    wire(a, b);
+    const plates = sink(b.id, b.output);
+
+    const before = steadyRates(state().nodes, state().edges).leaves.get(plates);
+    // three cycles per pass move three times as much over three times as long
+    state().updateRecipe(b.id, { multiplier: 3 });
+    const after = steadyRates(state().nodes, state().edges).leaves.get(plates);
+
+    expect(after).toBeCloseTo(before!);
+  });
+
+  it('does not let a slow side branch throttle what it never feeds', () => {
+    // the Biomass shape: an Electrolyzer with the longest cycle in the graph
+    // sits on a branch of its own, and used to divide the whole line's rates
+    const a = maker('A', 20, 5); // 4 Ore/s
+    const fast = eater('Fast', 10, 5); // 2 Ore/s -> 0.2 Plate/s
+    const slow = eater('Slow', 1, 100); // 0.01 Ore/s
+    wire(a, fast);
+    wire(a, slow);
+    const plates = sink(fast.id, fast.output);
+
+    expect(
+      steadyRates(state().nodes, state().edges).leaves.get(plates),
+    ).toBeCloseTo(0.2);
+  });
+
+  it('lets an input leaf stand for the outside world topping a handle up', () => {
+    const b = eater('B', 10, 10);
+    const feed = addNode('inputNode');
+    state().onConnect({
+      source: feed,
+      target: b.id,
+      sourceHandle: null,
+      targetHandle: b.input,
+    });
+    const plates = sink(b.id, b.output);
+
+    const { leaves } = steadyRates(state().nodes, state().edges);
+    expect(leaves.get(plates)).toBeCloseTo(0.1); // full capacity
+    expect(leaves.get(feed)).toBeCloseTo(1); // 10 Ore every 10s
+  });
+
+  it("reads a sub-line's turnover off its own slowest step", () => {
+    const line = addLine(
+      capture({
+        time: 20,
+        bottleneck: 5,
+        outputs: [{ id: 'ore', name: 'Ore', quantity: 100 }],
+      }),
+    );
+    const out = addNode('outputNode');
+    state().onConnect({
+      source: line,
+      target: out,
+      sourceHandle: 'ore',
+      targetHandle: null,
+    });
+
+    // 100 per pass, one pass every 5s — the critical path is the first pass
+    expect(
+      steadyRates(state().nodes, state().edges).leaves.get(out),
+    ).toBeCloseTo(20);
   });
 });
