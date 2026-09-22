@@ -146,13 +146,17 @@ export const CompareModalContent = () => {
   // measurement. Showing the 0 would be bad enough; ranking it would hand the
   // green arrow to whichever alternative is least finished
   const powerKnown = (m: LineMetrics) => m.demand > 0 || m.incomplete === 0;
-  const timeKnown = (m: LineMetrics) => m.time > 0 || m.incomplete === 0;
+  const timeKnown = (m: LineMetrics) => m.bottleneck > 0 || m.incomplete === 0;
 
   const gaps = (m: LineMetrics) =>
     `${m.incomplete} recipe${m.incomplete === 1 ? '' : 's'} with no EU or duration set`;
 
   // power (EU/t) is instantaneous draw — normalizing runs a recipe longer, not
   // harder, so demand never scales. only time (and material quantities) do.
+  //
+  // the time compared is the slowest step, not the critical path: what decides
+  // between two ways of making the same thing is how often each hands one over,
+  // and the path through a line is only ever paid once, on the first pass
   const rankPower = rankBy(
     view,
     x => x.metrics.demand,
@@ -160,7 +164,7 @@ export const CompareModalContent = () => {
   );
   const rankTime = rankBy(
     view,
-    x => x.metrics.time * x.factor,
+    x => x.metrics.bottleneck * x.factor,
     x => timeKnown(x.metrics),
   );
   const rankings: Record<
@@ -272,7 +276,7 @@ export const CompareModalContent = () => {
                     color="var(--mantine-color-blue-filled)"
                   />
                 }
-                label="Process time"
+                label="Cycle time"
                 value={null}
               />
             </Table.Th>
@@ -282,7 +286,7 @@ export const CompareModalContent = () => {
                 <Group gap={4}>
                   {timeKnown(metrics) ? (
                     <Text size="sm">
-                      {formatDuration(metrics.time * factor)}
+                      {formatDuration(metrics.bottleneck * factor)}
                     </Text>
                   ) : (
                     <Tooltip label={gaps(metrics)}>

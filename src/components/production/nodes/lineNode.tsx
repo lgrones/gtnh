@@ -190,7 +190,7 @@ export const LineNode = ({ id, data, ...props }: NodeProps<LineNodeType>) => {
           </Text>
 
           <Text size="xs" c="dimmed">
-            {formatDuration(capture.time * multiplier)}
+            {formatDuration((capture.bottleneck ?? capture.time) * multiplier)}
           </Text>
         </Group>
 
