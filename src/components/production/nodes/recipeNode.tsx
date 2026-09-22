@@ -33,6 +33,7 @@ import { useShallow } from 'zustand/shallow';
 import {
   DEFAULT_HATCH_AMPS,
   useItemNames,
+  cachedRates,
   useProductionStore,
   VOLTAGE_TIERS,
   type EnergyHatch,
@@ -659,7 +660,7 @@ export const RecipeNode = ({
         <Divider />
 
         {/* what it all COMES TO — computed, never typed into */}
-        <Calculations data={data} />
+        <Calculations id={id} data={data} />
 
         <Divider />
 
@@ -1014,8 +1015,23 @@ const Row = ({
 //
 // Time is shown in TICKS first, with seconds after. GT truncates the duration
 // to whole ticks and floors it at one, and neither is visible in seconds.
-const Calculations = ({ data }: { data: RecipeNodeType['data'] }) => {
+const Calculations = ({
+  id,
+  data,
+}: {
+  id: string;
+  data: RecipeNodeType['data'];
+}) => {
   const [open, setOpen] = useState(true);
+
+  // how much of this machine's capacity the line actually keeps fed. A number,
+  // so the selector compares equal between edits that do not move it
+  const duty = useProductionStore(state => {
+    const rates = cachedRates(state.nodes, state.edges);
+    const capacity = rates.capacity.get(id) ?? 0;
+    return capacity > 0 ? (rates.nodes.get(id) ?? 0) / capacity : 1;
+  });
+
   const result = overclock(data);
   const base = basePower(data.eu, data.time);
   const baseTier = recipeTier(base);
@@ -1163,6 +1179,17 @@ const Calculations = ({ data }: { data: RecipeNodeType['data'] }) => {
               label="Total"
               formula={`${fmt(result.time)}s × ${data.multiplier} =`}
               value={`${fmt(result.time * data.multiplier)}s`}
+            />
+          )}
+
+          {/* what the line keeps this machine at. Most stages of a real line
+              sit below 100% — only the narrowest one runs flat out — so this
+              is a reading rather than a warning */}
+          {duty < 0.999 && (
+            <Row
+              label="Duty"
+              formula="waiting on its inputs —"
+              value={`${fmt(duty * 100)}%`}
             />
           )}
 

@@ -202,6 +202,12 @@ export interface LinePort {
 // what a saved line takes, gives and costs — read off that line's own leaves
 // and recipes by `captureLine`. This is the whole contract a collapsed sub-line
 // exposes to the graph it sits in; nothing else about the source is carried
+// sink (output/byproduct) nodes mirror a recipe output they receive
+export const SINK_TYPES = new Set<ProductionNodeType>([
+  'outputNode',
+  'byproductNode',
+]);
+
 export interface LineCapture {
   inputs: LinePort[]; // what its input leaves ask the outside world for
   outputs: LinePort[]; // what its output leaves hand back

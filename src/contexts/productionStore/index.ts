@@ -40,7 +40,7 @@ export type {
 } from './types';
 export { DEFAULT_HATCH_AMPS, DRAG_HANDLE_CLASS, VOLTAGE_TIERS } from './types';
 export type { HandleOffsets } from './helpers';
-export { steadyRates, type LineRates } from './rates';
+export { cachedRates, steadyRates, type LineRates } from './rates';
 export {
   captureLine,
   layoutNodes,

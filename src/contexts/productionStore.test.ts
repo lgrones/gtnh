@@ -627,7 +627,7 @@ describe('sink remainder', () => {
 });
 
 describe('validateGraph', () => {
-  it('reports a deficit against the receiving recipe', () => {
+  it('does not fault a recipe fed less than its machine could take', () => {
     const a = addNode('recipeNode');
     state().renameNode(a, 'Producer');
     const outId = addOutput(a);
@@ -642,15 +642,44 @@ describe('validateGraph', () => {
       sourceHandle: outId,
       targetHandle: inId,
     });
+    completeRecipe(a);
+    completeRecipe(b);
 
-    const issues = validateGraph(state().nodes, state().edges);
-    expect(issues).toContainEqual(
+    // 1 Ore/s against a machine that could eat 1.6: it runs at 62% and every
+    // Ore made is used. That is how most of a line runs, not a fault
+    const { nodes: running, capacity } = steadyRates(
+      state().nodes,
+      state().edges,
+    );
+    expect(running.get(b)! / capacity.get(b)!).toBeCloseTo(0.625);
+    expect(validateGraph(state().nodes, state().edges)).toEqual([]);
+  });
+
+  it('flags a wired input that nothing ever delivers to', () => {
+    const a = addNode('recipeNode');
+    state().renameNode(a, 'Producer');
+    const outId = addOutput(a);
+    // wired up, and the row says the recipe makes none of it
+    state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 0 });
+
+    const b = addNode('recipeNode');
+    state().renameNode(b, 'Receiver');
+    const inId = addInput(b);
+    state().updateRecipeInput(b, inId, { name: 'Ore', quantity: 8 });
+    state().onConnect({
+      source: a,
+      target: b,
+      sourceHandle: outId,
+      targetHandle: inId,
+    });
+    completeRecipe(a);
+    completeRecipe(b);
+
+    expect(validateGraph(state().nodes, state().edges)).toContainEqual(
       expect.objectContaining({
-        kind: 'deficit',
+        kind: 'starved',
         recipe: 'Receiver',
         item: 'Ore',
-        demand: 8,
-        supply: 5,
       }),
     );
   });
@@ -678,12 +707,13 @@ describe('validateGraph', () => {
     const a = addNode('recipeNode');
     const outId = addOutput(a);
     state().updateRecipeOutput(a, outId, { name: 'Ore', quantity: 5 });
+    completeRecipe(a); // 5s a cycle, so 1 Ore/s with nowhere to go
 
     expect(validateGraph(state().nodes, state().edges)).toContainEqual(
       expect.objectContaining({
         kind: 'surplus',
         item: 'Ore',
-        supply: 5,
+        supply: 1,
         demand: 0,
       }),
     );
@@ -702,15 +732,15 @@ describe('validateGraph', () => {
       sourceHandle: outId,
       targetHandle: inId,
     });
+    completeRecipe(a);
+    completeRecipe(b);
 
-    expect(validateGraph(state().nodes, state().edges)).toContainEqual(
-      expect.objectContaining({
-        kind: 'surplus',
-        item: 'Ore',
-        supply: 10,
-        demand: 4,
-      }),
+    // both machines run a cycle every 5s: 2 Ore/s made against 0.8 taken
+    const surplus = validateGraph(state().nodes, state().edges).find(
+      issue => issue.kind === 'surplus',
     );
+    expect(surplus).toMatchObject({ item: 'Ore', supply: 2 });
+    expect(surplus?.demand).toBeCloseTo(0.8);
   });
 
   it('does not flag surplus when a sink absorbs the leftover', () => {
@@ -813,36 +843,35 @@ describe('validateGraph — one input, several producers', () => {
     expect(validateGraph(state().nodes, state().edges)).toEqual([]);
   });
 
-  it('reports one deficit against the receiver, for the shortfall of the sum', () => {
-    twoSources(3, 5);
+  it('adds the two together before deciding how hard the receiver runs', () => {
+    const { c } = twoSources(3, 5);
 
-    expect(
-      validateGraph(state().nodes, state().edges).filter(
-        issue => issue.kind === 'deficit',
-      ),
-    ).toEqual([
-      expect.objectContaining({
-        kind: 'deficit',
-        recipe: 'Receiver',
-        item: 'Ore',
-        supply: 8,
-        demand: 10,
-      }),
-    ]);
+    // 1.6 Ore/s between them against a machine that could eat 2: one part-duty
+    // receiver, not one fault per producer
+    const { nodes: running, capacity } = steadyRates(
+      state().nodes,
+      state().edges,
+    );
+    expect(running.get(c)! / capacity.get(c)!).toBeCloseTo(0.8);
+    expect(validateGraph(state().nodes, state().edges)).toEqual([]);
   });
 
-  it('charges each producer its share, so the over-producer alone is surplus', () => {
+  it('leaves each producer its share of what the receiver cannot take', () => {
     twoSources(8, 4);
 
-    // 12 made against 10 asked: each is charged in proportion to what it
-    // makes, so Left owes 10 x 8/12 and is 1 1/3 over
+    // 2.4 Ore/s made against 2 taken, and each is charged in proportion to
+    // what it makes: Left carries 2 x 1.6/2.4 and is a third of an Ore over
     expect(
       validateGraph(state().nodes, state().edges).filter(
         issue => issue.kind === 'surplus',
       ),
     ).toEqual([
-      expect.objectContaining({ kind: 'surplus', recipe: 'Left', supply: 8 }),
-      expect.objectContaining({ kind: 'surplus', recipe: 'Right', supply: 4 }),
+      expect.objectContaining({ kind: 'surplus', recipe: 'Left', supply: 1.6 }),
+      expect.objectContaining({
+        kind: 'surplus',
+        recipe: 'Right',
+        supply: 0.8,
+      }),
     ]);
   });
 
@@ -979,7 +1008,7 @@ describe('fractional quantities', () => {
     expect(validateGraph(state().nodes, state().edges)).toEqual([]);
   });
 
-  it('still reports a genuine fractional shortfall', () => {
+  it('settles a fractional supply without float dust', () => {
     const a = addNode('recipeNode');
     const outId = addOutput(a);
     state().updateRecipeOutput(a, outId, { name: 'Slag', quantity: 0.05 });
@@ -993,16 +1022,16 @@ describe('fractional quantities', () => {
       sourceHandle: outId,
       targetHandle: inId,
     });
+    completeRecipe(a);
+    completeRecipe(b);
 
-    expect(validateGraph(state().nodes, state().edges)).toContainEqual(
-      expect.objectContaining({
-        kind: 'deficit',
-        recipe: 'Receiver',
-        item: 'Slag',
-        demand: 0.2,
-        supply: 0.05,
-      }),
+    // a quarter of what the receiver could take, and every scrap of it used
+    const { nodes: running, capacity } = steadyRates(
+      state().nodes,
+      state().edges,
     );
+    expect(running.get(b)! / capacity.get(b)!).toBeCloseTo(0.25);
+    expect(validateGraph(state().nodes, state().edges)).toEqual([]);
   });
 
   it('mirrors a fractional leftover onto the sink', () => {
@@ -1038,7 +1067,7 @@ describe('recipe multiplier', () => {
   const leafData = (id: string) =>
     state().nodes.find(n => n.id === id)!.data as SinkNodeData;
 
-  it('scales supply so a higher producer multiplier clears a deficit', () => {
+  it('moves the pass ratio but not the rate the producer holds', () => {
     const a = addNode('recipeNode');
     const outId = addOutput(a);
     state().updateRecipeOutput(a, outId, { name: 'Plate', quantity: 1 });
@@ -1051,19 +1080,17 @@ describe('recipe multiplier', () => {
       sourceHandle: outId,
       targetHandle: inId,
     });
-
-    // 1/cycle vs 2 needed -> deficit at multiplier 1
-    expect(
-      validateGraph(state().nodes, state().edges).some(
-        i => i.kind === 'deficit',
-      ),
-    ).toBe(true);
-
-    // run the producer twice -> supply 2, balanced
-    state().updateRecipe(a, { multiplier: 2 });
     completeRecipe(a);
     completeRecipe(b);
-    expect(validateGraph(state().nodes, state().edges)).toEqual([]);
+
+    const before = steadyRates(state().nodes, state().edges).nodes.get(a);
+    // two cycles a pass move twice as much over twice as long, so the machine
+    // still hands over one Plate every five seconds
+    state().updateRecipe(a, { multiplier: 2 });
+    expect(steadyRates(state().nodes, state().edges).nodes.get(a)).toBeCloseTo(
+      before!,
+    );
+    expect(itemPerPass(recipeData(a), recipeData(a).outputs[0]!)).toBe(2);
   });
 
   it('scales sink remainder by the producer multiplier', () => {
@@ -2270,14 +2297,18 @@ describe('sub-line nodes — balance', () => {
     expect(state().edges).toHaveLength(1);
     expect(
       validateGraph(state().nodes, state().edges).filter(
-        issue => issue.kind === 'deficit' || issue.kind === 'surplus',
+        issue => issue.kind === 'starved' || issue.kind === 'surplus',
       ),
     ).toEqual([]);
   });
 
-  it('reports a deficit when the sub-line makes less than is asked of it', () => {
+  it('runs a recipe at part duty when the sub-line cannot keep up', () => {
     const line = addLine(
-      capture({ outputs: [{ id: 'plate', name: 'Plate', quantity: 1 }] }),
+      capture({
+        time: 10,
+        bottleneck: 10,
+        outputs: [{ id: 'plate', name: 'Plate', quantity: 1 }],
+      }),
     );
 
     const recipe = addNode('recipeNode');
@@ -2293,11 +2324,17 @@ describe('sub-line nodes — balance', () => {
       targetHandle: input,
     });
 
+    // one Plate every 10s against an Assembler that could take 4 every 5s
+    const { nodes: running, capacity } = steadyRates(
+      state().nodes,
+      state().edges,
+    );
+    expect(running.get(recipe)! / capacity.get(recipe)!).toBeCloseTo(0.125);
     expect(
-      validateGraph(state().nodes, state().edges).find(
-        issue => issue.kind === 'deficit',
+      validateGraph(state().nodes, state().edges).filter(
+        issue => issue.kind === 'starved',
       ),
-    ).toMatchObject({ recipe: 'Assembler', supply: 1, demand: 4 });
+    ).toEqual([]);
   });
 
   it('reports an unfed sub-line input', () => {
@@ -2683,24 +2720,24 @@ describe('validateGraph against a loop an input node tops up', () => {
     return validateGraph(state().nodes, state().edges);
   };
 
-  it('reports no deficit on the handle the leaf covers', () => {
-    expect(loop(3, true).filter(issue => issue.kind === 'deficit')).toEqual([]);
+  it('reports nothing starved on the handle the leaf covers', () => {
+    expect(loop(3, true).filter(issue => issue.kind === 'starved')).toEqual([]);
   });
 
   it('reports no surplus for the loop output either', () => {
     expect(loop(3, true).filter(issue => issue.kind === 'surplus')).toEqual([]);
   });
 
-  it('still reports the deficit when no leaf tops the handle up', () => {
+  it('reports a loop that decays as starved when no leaf tops it up', () => {
+    // R2 hands back 3 of the 4 R1 needs, so each round of the loop runs at
+    // three quarters of the one before it and the pair grinds to a halt
     expect(loop(3, false)).toContainEqual(
-      expect.objectContaining({
-        kind: 'deficit',
-        recipe: 'R1',
-        item: 'Dust',
-        supply: 3,
-        demand: 4,
-      }),
+      expect.objectContaining({ kind: 'starved', recipe: 'R1', item: 'Dust' }),
     );
+  });
+
+  it('sustains a loop that returns everything it takes', () => {
+    expect(loop(4, false)).toEqual([]);
   });
 });
 

@@ -8,6 +8,7 @@ import {
   type GraphIssue,
 } from '@/contexts/productionStore';
 
+import { formatRate } from '../common/format';
 import { Panel } from '../common/panel';
 
 export const IssuePanel = () => {
@@ -39,10 +40,12 @@ export const IssuePanel = () => {
 // given a label — which is the point
 const issueLabel = (issue: GraphIssue): string => {
   switch (issue.kind) {
-    case 'deficit':
-      return `needs ${issue.demand}, supplies ${issue.supply}`;
+    case 'starved':
+      // a recipe fed LESS than it could take just runs at part duty, which is
+      // how most of a line runs; one fed nothing at all does not run
+      return 'nothing arrives, so it never runs';
     case 'surplus':
-      return `${(issue.supply ?? 0) - (issue.demand ?? 0)} unused, no sink`;
+      return `${formatRate((issue.supply ?? 0) - (issue.demand ?? 0))}/s unused, no sink`;
     case 'unfed':
       return 'no source';
     case 'incomplete':

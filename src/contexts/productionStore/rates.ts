@@ -2,8 +2,7 @@ import { type Edge } from '@xyflow/react';
 
 import { overclock } from '@/domain/overclock';
 
-import { SINK_TYPES } from './helpers';
-import type { ProductionNode, RecipeItem } from './types';
+import { SINK_TYPES, type ProductionNode, type RecipeItem } from './types';
 
 // What a line does when it has been running for a while, as opposed to what one
 // pass of it moves.
@@ -68,8 +67,17 @@ const flowNode = (node: ProductionNode): FlowNode | undefined => {
 export interface LineRates {
   /** Units of work per second each recipe / sub-line actually turns over */
   nodes: Map<string, number>;
+  /** Units of work per second each one COULD turn over, if nothing starved it */
+  capacity: Map<string, number>;
   /** Items per second each leaf node carries in, or hands out */
   leaves: Map<string, number>;
+  /** `${node}:${handle}` -> items per second arriving at that input handle */
+  supply: Map<string, number>;
+  /**
+   * `${node}:${handle}` -> items per second leaving that output handle that no
+   * recipe takes
+   */
+  spare: Map<string, number>;
 }
 
 // rates settle by division, so two that should agree can land a few ULPs apart
@@ -145,32 +153,47 @@ export const steadyRates = (
   const rate = new Map<string, number>();
   for (const [id, shape] of flow) rate.set(id, shape.capacity);
 
-  // what one edge's source actually hands this consumer, at the rates the
-  // current round is holding. The same proportional rule the per-pass balance
-  // uses: an output never delivers more than it makes, and one that is
-  // over-subscribed is shared out by what each consumer asked for
-  const delivered = (edge: Edge): number => {
+  // items per second one edge's source makes available through it
+  const made = (edge: Edge): number => {
     const output = item(edge.source, edge.sourceHandle, 'outputs');
-    const input = item(edge.target, edge.targetHandle, 'inputs');
-    if (output === undefined || input === undefined) return 0;
+    return output === undefined
+      ? 0
+      : (rate.get(edge.source) ?? 0) * output.quantity;
+  };
 
-    const made = (rate.get(edge.source) ?? 0) * output.quantity;
-    const asked = (rate.get(edge.target) ?? 0) * input.quantity;
+  // what one edge is asked to carry: its target handle's whole need, split
+  // across the outputs wired into it in proportion to what each one makes.
+  // Two half-feeding producers each owe half of it — the same rule the
+  // per-pass balance uses, in rates
+  const claim = (edge: Edge): number => {
+    const input = item(edge.target, edge.targetHandle, 'inputs');
+    if (input === undefined) return 0;
+    const need = (rate.get(edge.target) ?? 0) * input.quantity;
+
+    const group = incoming.get(`${edge.target}:${edge.targetHandle ?? ''}`);
+    if (group === undefined || group.length === 0) return 0;
+
+    const total = group.reduce((sum, sibling) => sum + made(sibling), 0);
+    const share = total > 0 ? made(edge) / total : 1 / group.length;
+
+    return need * share;
+  };
+
+  // what the source actually hands over: an output never delivers more than it
+  // makes, and one that is over-subscribed is shared out by what each consumer
+  // claimed of it
+  const delivered = (edge: Edge): number => {
+    const asked = claim(edge);
     if (asked <= 0) return 0;
 
     const siblings = outgoing.get(`${edge.source}:${edge.sourceHandle ?? ''}`);
-    const claimed = (siblings ?? []).reduce((sum, sibling) => {
-      const want = item(sibling.target, sibling.targetHandle, 'inputs');
-      return (
-        sum +
-        (want === undefined
-          ? 0
-          : (rate.get(sibling.target) ?? 0) * want.quantity)
-      );
-    }, 0);
+    const claimed = (siblings ?? []).reduce(
+      (sum, sibling) => sum + claim(sibling),
+      0,
+    );
     if (claimed <= 0) return 0;
 
-    return (Math.min(made, claimed) * asked) / claimed;
+    return (Math.min(made(edge), claimed) * asked) / claimed;
   };
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -200,6 +223,26 @@ export const steadyRates = (
     if (!moved) break;
   }
 
+  // what settled, per handle, for the balance checks and the leaves alike
+  const supply = new Map<string, number>();
+  for (const [key, feeds] of incoming)
+    supply.set(
+      key,
+      feeds.reduce((sum, edge) => sum + delivered(edge), 0),
+    );
+
+  const spare = new Map<string, number>();
+  for (const [id, shape] of flow)
+    for (const output of shape.outputs) {
+      const key = `${id}:${output.id}`;
+      const made = (rate.get(id) ?? 0) * output.quantity;
+      const taken = (outgoing.get(key) ?? []).reduce(
+        (sum, edge) => sum + delivered(edge),
+        0,
+      );
+      spare.set(key, made - taken);
+    }
+
   // leaves, in the same terms: a sink takes what its output handle has left
   // after the recipes on it, and an input leaf carries in what the recipes
   // wired into its handle leave short
@@ -207,23 +250,44 @@ export const steadyRates = (
 
   for (const edge of edges) {
     const output = item(edge.source, edge.sourceHandle, 'outputs');
-    if (output !== undefined && sinkIds.has(edge.target)) {
-      const made = (rate.get(edge.source) ?? 0) * output.quantity;
-      const taken = (
-        outgoing.get(`${edge.source}:${edge.sourceHandle ?? ''}`) ?? []
-      ).reduce((sum, sibling) => sum + delivered(sibling), 0);
-      leaves.set(edge.target, Math.max(0, made - taken));
-    }
+    if (output !== undefined && sinkIds.has(edge.target))
+      leaves.set(
+        edge.target,
+        Math.max(
+          0,
+          spare.get(`${edge.source}:${edge.sourceHandle ?? ''}`) ?? 0,
+        ),
+      );
 
     const input = item(edge.target, edge.targetHandle, 'inputs');
     if (input !== undefined && leafIds.has(edge.source)) {
       const needed = (rate.get(edge.target) ?? 0) * input.quantity;
-      const supplied = (
-        incoming.get(`${edge.target}:${edge.targetHandle ?? ''}`) ?? []
-      ).reduce((sum, sibling) => sum + delivered(sibling), 0);
-      leaves.set(edge.source, Math.max(0, needed - supplied));
+      const key = `${edge.target}:${edge.targetHandle ?? ''}`;
+      leaves.set(edge.source, Math.max(0, needed - (supply.get(key) ?? 0)));
     }
   }
 
-  return { nodes: rate, leaves };
+  const capacity = new Map<string, number>();
+  for (const [id, shape] of flow) capacity.set(id, shape.capacity);
+
+  return { nodes: rate, capacity, leaves, supply, spare };
+};
+
+// Every node on the canvas asks this same question of the same two arrays, and
+// the store hands back the same references until something is edited — so the
+// solve is done once per graph rather than once per node. A single entry is
+// enough: there is one graph on screen
+let memo:
+  | { nodes: ProductionNode[]; edges: Edge[]; rates: LineRates }
+  | undefined;
+
+export const cachedRates = (
+  nodes: ProductionNode[],
+  edges: Edge[],
+): LineRates => {
+  if (memo?.nodes === nodes && memo.edges === edges) return memo.rates;
+
+  const rates = steadyRates(nodes, edges);
+  memo = { nodes, edges, rates };
+  return rates;
 };

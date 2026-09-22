@@ -11,6 +11,7 @@ import type { MachineConfig } from '@/domain/machines/types';
 import { hatchVoltage, overclock } from '@/domain/overclock';
 import { TICKS_PER_SECOND, TIER_EU } from '@/domain/tiers';
 
+import { steadyRates } from './rates';
 import {
   DEFAULT_HATCH_AMPS,
   DRAG_HANDLE_CLASS,
@@ -20,14 +21,18 @@ import {
   type MachineEntry,
   type PlaceableNodeType,
   type ProductionNode,
-  type ProductionNodeType,
   type EnergyHatch,
   type RecipeItem,
   type RecipeKind,
   type RecipeNodeData,
   type Waypoint,
   type VoltageTier,
+  SINK_TYPES,
 } from './types';
+
+// declared with the node types it names, re-exported here because every caller
+// reads the graph vocabulary out of this module
+export { SINK_TYPES };
 
 // declared with the node shapes it is stored on, re-exported here so every
 // caller keeps reading the graph vocabulary out of one module
@@ -450,12 +455,6 @@ export const mapLine = (
       : node,
   );
 
-// sink (output/byproduct) nodes mirror a recipe output they receive
-export const SINK_TYPES = new Set<ProductionNodeType>([
-  'outputNode',
-  'byproductNode',
-]);
-
 // how many times over a recipe's listed item quantities actually move per pass:
 // its sequential cycles times the concurrent recipes its machine runs. parallels
 // raise throughput without lengthening the cycle, so they scale I/O exactly as
@@ -797,12 +796,17 @@ const NET_EPSILON = 1e-9;
 const balanceEpsilon = (supply: number, demand: number): number =>
   Math.max(Math.abs(supply), Math.abs(demand), 1) * NET_EPSILON;
 
+// what counts as a machine that never runs rather than one running slowly. A
+// starved loop approaches zero without reaching it, so the test is a fraction
+// of what the machine could hold rather than an exact nothing
+const DEAD_FRACTION = 1e-6;
+
 // a problem found by validateGraph (run on demand, not while editing)
 export interface GraphIssue {
-  recipe: string; // recipe node display name (receiver for deficit, else owner)
+  recipe: string; // the node the issue belongs to, by display name
   item: string; // item name (or the missing field, for `incomplete`)
   kind:
-    | 'deficit'
+    | 'starved'
     | 'surplus'
     | 'unfed'
     | 'incomplete'
@@ -812,7 +816,8 @@ export interface GraphIssue {
     | 'throttled'
     | 'overparallel'
     | 'unmodeled';
-  // deficit/surplus: the output's quantity and the demand on it
+  // surplus: items per SECOND the output makes, and the part of it anything
+  //   downstream actually takes
   // overparallel: the parallels running under the node's ceiling, and the cap
   //   the machine would otherwise have run
   // underheated: the machine's heat and the recipe's, both in K
@@ -909,11 +914,13 @@ const overclockIssues = (data: RecipeNodeData): GraphIssue[] => {
   return issues;
 };
 
-// check quantity balance between recipes:
-//   - deficit: a recipe output feeds downstream recipes that demand more than
-//     it produces (reported against each RECEIVING recipe)
-//   - surplus: a recipe output has leftover quantity (incl. fully unconnected)
-//     with no sink to absorb it
+// check the balance between recipes, at the rates they settle on rather than
+// per pass (see `steadyRates`): a stage nothing keeps fed runs at part duty,
+// which is how most lines run and is not a fault. What is:
+//   - surplus: an output making more per second than anything takes, with no
+//     sink to absorb the rest (includes fully unconnected outputs)
+//   - starved: an input that is wired up and still receives nothing, so the
+//     recipe cannot run at all
 //   - unfed: a recipe input has no incoming edge (no source at all)
 //
 // everything else here — missing fields, name mismatches, and the machine
@@ -924,8 +931,7 @@ export const validateGraph = (
   edges: Edge[],
 ): GraphIssue[] => {
   const index = indexItems(nodes);
-  const demand = demandByOutput(index, edges);
-  const supplied = supplyByInput(index, edges);
+  const rates = steadyRates(nodes, edges);
   const issues: GraphIssue[] = [];
 
   const names = new Map(nodes.map(node => [node.id, node.data.name]));
@@ -937,11 +943,12 @@ export const validateGraph = (
   const fed = new Set<string>();
   // output handle keys absorbed by a sink (leftover handled)
   const absorbed = new Set<string>();
+  // input handle key -> the recipes and sub-lines wired into it
+  const sources = new Map<string, string[]>();
 
   // input handle keys an input leaf feeds. A leaf carries in exactly the
   // shortfall its handle is left with (see syncMirrors), so a handle in here
-  // cannot be short however little the recipes wired into it deliver — the
-  // deficit belongs to whatever ELSE that output owes, not to this receiver
+  // has whatever it asks for however little the recipes wired into it deliver
   const inputIds = new Set(
     nodes.filter(node => node.type === 'inputNode').map(node => node.id),
   );
@@ -963,6 +970,9 @@ export const validateGraph = (
       recipeItem(index, edge.target, edge.targetHandle, 'inputs');
 
     if (input) {
+      const into = `${edge.target}:${edge.targetHandle ?? ''}`;
+      sources.set(into, [...(sources.get(into) ?? []), edge.source]);
+
       // a recipe<->recipe edge whose two item names disagree — usually the
       // aftermath of renaming one side; the link is kept but flagged here
       if (output) {
@@ -1010,31 +1020,27 @@ export const validateGraph = (
     const items = nodeItems(node);
     if (items === undefined) continue;
 
+    const running = rates.nodes.get(node.id) ?? 0;
+
     for (const output of items.outputs) {
       const key = `${node.id}:${output.id}`;
-      const needed = demand.get(key) ?? 0;
-      // produced over all runs of this recipe / copies of this sub-line
-      const supply = output.quantity * items.scale;
-      const slack = balanceEpsilon(supply, needed);
+      // made and left over per SECOND, at the rate this node settled on
+      const made = running * output.quantity;
+      const spare = rates.spare.get(key) ?? 0;
 
       // leftover with nowhere to go (no sink); includes unconnected outputs.
-      // An over-subscribed output has none, and what it is short of is the
-      // receiving handles' problem — reported there, once, below
-      if (!absorbed.has(key) && supply - needed > slack)
+      // It backs up in the machine's buses, which is the one imbalance a
+      // running line cannot absorb by slowing down
+      if (!absorbed.has(key) && spare > balanceEpsilon(made, made - spare))
         issues.push({
           recipe: node.data.name,
           item: output.name,
           kind: 'surplus',
-          supply,
-          demand: needed,
+          supply: made,
+          demand: made - spare,
         });
     }
 
-    // the receiving end: a handle is short when everything wired into it
-    // delivers less than it asks for. Asked here rather than at the producing
-    // output because an input fed by SEVERAL outputs is only short of their
-    // sum — charging each of them the whole need reported one deficit per
-    // source for a line that balances
     for (const input of items.inputs) {
       const key = `${node.id}:${input.id}`;
 
@@ -1047,20 +1053,35 @@ export const validateGraph = (
         continue;
       }
 
-      // a leaf carries in exactly the shortfall (see syncMirrors), so this
-      // handle cannot be short however little the recipes wired into it deliver
+      // a leaf carries in whatever the recipes leave short (see syncMirrors),
+      // so this handle always has what it asks for
       if (toppedUp.has(key)) continue;
 
-      const needed = input.quantity * items.scale;
-      const delivered = supplied.get(key) ?? 0;
+      // A recipe fed less than its machines could take simply runs at part
+      // duty — normal, and every line has stages that do. One fed effectively
+      // nothing does not run at all, which is what this catches: a handle that
+      // holds its node to a millionth of what it could hold. A loop that
+      // returns less than it consumes lands here too, decaying towards zero
+      // round after round rather than settling anywhere above it.
+      //
+      // Skipped when every source is itself stopped for want of EU or an
+      // unfilled field, because those say why on their own node and this would
+      // only repeat them down the chain
+      const capacity = rates.capacity.get(node.id) ?? 0;
+      const supported =
+        input.quantity > 0
+          ? (rates.supply.get(key) ?? 0) / input.quantity
+          : capacity;
 
-      if (needed - delivered > balanceEpsilon(delivered, needed))
+      if (
+        capacity > 0 &&
+        supported < capacity * DEAD_FRACTION &&
+        (sources.get(key) ?? []).some(id => (rates.capacity.get(id) ?? 0) > 0)
+      )
         issues.push({
           recipe: node.data.name,
           item: input.name,
-          kind: 'deficit',
-          supply: delivered,
-          demand: needed,
+          kind: 'starved',
         });
     }
   }
