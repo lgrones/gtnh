@@ -232,6 +232,58 @@ node can still be given a 64 A hatch the game would refuse. It is extractable
 every machine, so it is its own stage: a `Machine.hatches` field, an extractor
 pass, a `GraphIssue` kind and a node guard.
 
+## Stage 11 — the Industrial Coke Oven, and the method that hid it
+
+The ICO was `unknown` with `assume: 1`, and the wiki's 18/30 parallels sat in
+its own tooltip:
+
+```java
+private int tier = 0;                       // checkMachine: 1 for 8 Heat Resistant casings, 2 for 8 Heat Proof
+public int getMaxParallelRecipes() { return 6 + tier * 12; }
+
+protected void setupProcessingLogic(ProcessingLogic logic) {
+    super.setupProcessingLogic(logic);
+    logic.setEuModifier((100F - (GTUtility.getTier(getMaxInputVoltage()) * 4)) / 100F);
+}
+```
+
+Three changes, each of which generalises:
+
+- **`builderText` reads `setupProcessingLogic` too.** It only ever read
+  `createProcessingLogic` and `createOverclockCalculator`, and GT uses the third
+  method for exactly the settings that depend on the built structure. The root
+  controller's own copy is skipped — it is the plumbing every machine inherits
+  (`setBatchSize(isBatchModeEnabled() ? … : 1)`), and reading it would report an
+  unresolved batch size for all 214.
+- **`STRUCTURE_PARAMS` entries can be scoped to a class**, through `only`. The
+  coke oven's field is called `tier`, which is far too common a name to claim
+  globally; `MapOptions.owner` carries the controller being read, and an entry
+  with `only` is invisible to every other class. The param is a `count` 1–2,
+  bounded by `checkMachine` demanding 8 casings of one kind or the other.
+- **`mCoilTier` maps to the coil's TIER.** A name is in `COIL_TIER_NAMES` or in
+  `COIL_NAMES`, never both: the two readings are `ordinal - 2` against
+  `1 + 900 * ordinal`, so guessing between them is three orders of magnitude of
+  wrong.
+
+What moved, at 5.09.51.482: `formula` 32 → 33, `unknown` 23 → 22, `modelled`
+172 → 173, `coilTier` params 7 → 8, `count` 5 → 6.
+
+- the **Industrial Coke Oven** runs 18 or 30 parallels by casing and takes 4%
+  off its EU per voltage tier of the summed hatch voltage — one HV hatch is
+  0.88, four are 0.84
+- the **ExxonMobil Chemical Plant** gains the speed bonus its source comments
+  call "same as pyro oven", `2 / (1 + coil tier)`
+- the **Matter Fabrication CPU** gains the perfect overclock it sets in
+  `setupProcessingLogic`
+- the **Dangote Distillus** now reports two more honest refusals: its EU
+  modifier and speed bonus both switch on `mMode`, like its parallel count
+
+**A machine may now declare two `primary` parameters** — the Chemical Plant
+reads a pipe casing for its parallels and a coil for its speed — so the node
+shows the first inline and the gear holds the rest. The catalog guard that
+asserted at most one is gone; what replaces it pins the Chemical Plant's pair,
+because the invariant worth keeping is that nothing declared goes unrendered.
+
 ## Still to do
 
 Nothing in the staged plan. The open work is the in-game verification listed at

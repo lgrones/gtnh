@@ -23,6 +23,13 @@ export interface StructureParam {
   param: CountParam;
   /** Where the bounds were read from, quoted in the coverage report */
   source: string;
+  /**
+   * Controller classes this entry applies to. Absent means every class, which
+   * is safe for a name only one machine family uses (`mAnvilTier`). A name as
+   * common as `tier` has to be scoped, or it would hijack the same field on
+   * every other controller that happens to spell it that way.
+   */
+  only?: string[];
 }
 
 /**
@@ -44,6 +51,23 @@ export const STRUCTURE_PARAMS: Record<string, StructureParam> = {
     },
     source:
       'MTEIndustrialMacerator — controllerTier starts at 1 and onRightclick/onPostTick set it to 2 for a Maceration_Upgrade_Chip; checkMachine then demands structureTier >= controllerTier',
+  },
+
+  tier: {
+    param: {
+      id: 'cokeOvenCasing',
+      kind: 'count',
+      label: 'Coke oven casing tier',
+      help: 'Heat Resistant Coke Oven Casings are 1 (18 parallels), Heat Proof 2 (30).',
+      min: 1,
+      max: 2,
+      default: 1,
+      primary: true,
+      required: true,
+    },
+    source:
+      'MTEIndustrialCokeOven.checkMachine — tier is 1 for 8 Heat Resistant casings, 2 for 8 Heat Proof ones, and the structure is refused at 0',
+    only: ['MTEIndustrialCokeOven'],
   },
 
   mAnvilTier: {

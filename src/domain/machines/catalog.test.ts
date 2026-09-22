@@ -184,12 +184,15 @@ describe('parameter declarations', () => {
     }
   });
 
-  it('names at most one parameter as the inline one', () => {
-    for (const machine of MACHINES) {
-      expect(
-        machine.params.filter(param => param.primary === true).length,
-      ).toBeLessThanOrEqual(1);
-    }
+  it('lets a machine declare more than one parameter worth showing', () => {
+    // the Chemical Plant reads its pipe casing for parallels and its coil for
+    // the speed bonus, and the extractor marks both `primary`. The node shows
+    // the first inline and the gear holds the rest, so several is no longer a
+    // contradiction — what would be is a declared parameter nothing renders
+    expect(findMachine('ExxonMobil Chemical Plant')?.params).toMatchObject([
+      { id: 'pipeCasing', primary: true },
+      { id: 'coil', primary: true },
+    ]);
   });
 
   it('gives every parameter a default it will accept', () => {

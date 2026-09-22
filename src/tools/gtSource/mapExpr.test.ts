@@ -65,6 +65,26 @@ describe('references', () => {
     });
   });
 
+  it('reads a field that holds a coil tier as the tier, not the heat', () => {
+    // MTEChemicalPlant: mCoilTier = checkCoil.getTier(), and the two readings
+    // are three orders of magnitude apart
+    expect(map('2F / (1 + this.mCoilTier)').expr).toEqual({
+      div: [2, { add: [1, 'param.coil.tier'] }],
+    });
+  });
+
+  it('keeps a scoped structure parameter out of every other controller', () => {
+    // `tier` is the coke oven's casing and nothing anywhere else, so the same
+    // name on another class stays unresolved rather than becoming a casing
+    expect(
+      map('6 + tier * 12', { owner: 'MTEIndustrialCokeOven' }).expr,
+    ).toEqual({ add: [6, { mul: ['param.cokeOvenCasing', 12] }] });
+    expect(() => map('6 + tier * 12', { owner: 'MTESomethingElse' })).toThrow(
+      MapError,
+    );
+    expect(() => map('6 + tier * 12')).toThrow(MapError);
+  });
+
   it('declares a structure parameter for a tier read during checkMachine', () => {
     const { expr, params } = map('2 * getPipeCasingTier()');
     expect(expr).toEqual({ mul: [2, 'param.pipeCasing'] });

@@ -194,6 +194,12 @@ const ParamField = ({
   }
 };
 
+// the one parameter the node shows next to the hatches: the first the machine
+// marks `primary`. A machine may declare several, and the rest live behind the
+// gear — the node stays one line tall whatever the catalog says
+const inlineParam = (machine: ResolvedMachine): MachineParam | undefined =>
+  machine.parameters.find(param => param.primary === true);
+
 // the machine's own settings: every parameter that is not the inline one, plus
 // the parallel ceiling. always present on a multiblock, because the ceiling
 // always belongs somewhere, and dotted when anything has been changed from
@@ -212,7 +218,13 @@ const MachineSettings = ({
   const updateRecipe = useProductionStore(state => state.updateRecipe);
   const [opened, setOpened] = useState(false);
 
-  const extra = machine.parameters.filter(param => param.primary !== true);
+  // everything the node does not already show inline. `inlineParam` picks the
+  // first primary one, so a machine declaring two — the Chemical Plant reads a
+  // casing for its parallels and a coil for its speed — keeps the second here
+  // rather than nowhere
+  const extra = machine.parameters.filter(
+    param => param !== inlineParam(machine),
+  );
   const touched =
     data.parallelLimit !== undefined ||
     Object.keys(data.config ?? {}).length > 0;
@@ -345,7 +357,7 @@ export const RecipeNode = ({
   // data, so this is the same object Calculations below reads
   const result = overclock(data);
   const machine = result.machine;
-  const primaryParam = machine.parameters.find(param => param.primary === true);
+  const primaryParam = inlineParam(machine);
 
   // a persisted name the catalog cannot resolve must stay selectable, or the
   // Select renders blank and the next edit to any other field persists it away

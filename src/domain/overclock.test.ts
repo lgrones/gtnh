@@ -477,6 +477,55 @@ describe('memoisation', () => {
   });
 });
 
+describe('the Industrial Coke Oven — casings for parallels, tier for the discount', () => {
+  // `6 + tier * 12` off the casing the player built, and an EU modifier of
+  // `(100 - voltageTier * 4) / 100` off the summed hatch voltage
+  const ico = (
+    cokeOvenCasing: number,
+    hatches: EnergyHatch[],
+  ): RecipeNodeData =>
+    multi({
+      machine: 'Industrial Coke Oven',
+      hatches,
+      config: { cokeOvenCasing },
+      // 16 EU/t over 100 ticks
+      eu: 1600,
+      time: 5,
+    });
+
+  it.each([
+    ['Heat Resistant', 1, 18],
+    ['Heat Proof', 2, 30],
+  ])('runs %s casings at %i parallels', (_what, casing, expected) => {
+    expect(overclock(ico(casing, [hatch('HV')])).parallel.machineCap).toBe(
+      expected,
+    );
+  });
+
+  it('takes 4% off per voltage tier of the summed hatch voltage', () => {
+    // one HV hatch is 512, which GT numbers tier 3
+    expect(overclock(ico(1, [hatch('HV')])).modifiers.eut).toBeCloseTo(0.88);
+    // four of them sum to 2,048 — EV, tier 4
+    expect(overclock(ico(1, [hatch('HV', 4)])).modifiers.eut).toBeCloseTo(0.84);
+  });
+
+  it('asks which casing the player built before it answers', () => {
+    const unset = overclock(
+      multi({
+        machine: 'Industrial Coke Oven',
+        hatches: [hatch('HV')],
+        eu: 1600,
+        time: 5,
+      }),
+    );
+    expect(unset.machine.parameters.map(param => param.id)).toEqual([
+      'cokeOvenCasing',
+    ]);
+    // the default is the lower casing, and the node raises `incomplete`
+    expect(unset.parallel.machineCap).toBe(18);
+  });
+});
+
 describe('the Industrial Maceration Stack — a parallel model with an upgrade in it', () => {
   // `Math.max(1, (controllerTier == 1 ? 2 : 8) * tTier)` where tTier is the
   // summed hatch voltage's tier, so the parallel count is the wiki's table

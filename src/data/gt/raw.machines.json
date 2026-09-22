@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "gtVersion": "5.09.51.482",
-  "generatedAt": "2026-09-21T19:04:37.686Z",
+  "generatedAt": "2026-09-22T18:14:53.265Z",
   "machines": [
     {
       "id": "absolute_baryonic_perfection_purification_unit",
@@ -661,7 +661,7 @@
         "calculator": "default",
         "params": "none"
       },
-      "notes": "Not fully read from source: getMaxParallelRecipes: switch (mMode) {\n            case DistillationTower -> DT_MODE_MAX_PARALLELS; parallel."
+      "notes": "Not fully read from source: getMaxParallelRecipes: switch (mMode) {\n            case DistillationTower -> DT_MODE_MAX_PARALLELS; parallel; eutModifier (setEuModifier); durationModifier (setSpeedBonus)."
     },
     {
       "id": "data_bank",
@@ -1381,6 +1381,14 @@
           "default": 0,
           "primary": true,
           "required": true
+        },
+        {
+          "id": "coil",
+          "kind": "coilTier",
+          "label": "Heating coils",
+          "default": "cupronickel",
+          "primary": true,
+          "required": true
         }
       ],
       "processing": {
@@ -1388,6 +1396,7 @@
           "kind": "formula",
           "expr": { "mul": [2, "param.pipeCasing"] }
         },
+        "durationModifier": { "div": [2, { "add": [1, "param.coil.tier"] }] },
         "amperageOC": true
       },
       "calculator": {},
@@ -2182,25 +2191,38 @@
         "mod": "gtplusplus",
         "nameFrom": "registration"
       },
-      "params": [],
+      "params": [
+        {
+          "id": "cokeOvenCasing",
+          "kind": "count",
+          "label": "Coke oven casing tier",
+          "help": "Heat Resistant Coke Oven Casings are 1 (18 parallels), Heat Proof 2 (30).",
+          "min": 1,
+          "max": 2,
+          "default": 1,
+          "primary": true,
+          "required": true
+        }
+      ],
       "processing": {
         "parallel": {
-          "kind": "unknown",
-          "reason": "getMaxParallelRecipes: 6 + tier * 12",
-          "assume": 1
+          "kind": "formula",
+          "expr": { "add": [6, { "mul": ["param.cokeOvenCasing", 12] }] }
+        },
+        "eutModifier": {
+          "div": [{ "sub": [100, { "mul": ["tier", 4] }] }, 100]
         },
         "amperageOC": true
       },
       "calculator": {},
-      "confidence": "unknown",
+      "confidence": "modelled",
       "provenance": {
         "identity": "generated",
         "parallel": "generated",
         "processing": "generated",
         "calculator": "default",
-        "params": "none"
-      },
-      "notes": "Not fully read from source: getMaxParallelRecipes: 6 + tier * 12; parallel."
+        "params": "generated"
+      }
     },
     {
       "id": "industrial_cutting_factory",
@@ -3268,6 +3290,7 @@
           "assume": 1
         },
         "eutModifier": 0.8,
+        "overclock": { "durationDecreasePerOC": 4, "eutIncreasePerOC": 4 },
         "amperageOC": true
       },
       "calculator": {},

@@ -255,13 +255,29 @@ const CALCULATOR_SETTERS = [
 
 /**
  * The builder text for a controller, inherited from an ancestor when it has
- * none
+ * none.
+ *
+ * `setupProcessingLogic` is read alongside the two builders because GT sets the
+ * same knobs there when they depend on the built structure —
+ * `logic.setEuModifier(...)` off the hatch tier, `logic.setSpeedBonus(...)` off
+ * the coil. The root controller's own copy is skipped: it is the plumbing every
+ * machine inherits (`setBatchSize(isBatchModeEnabled() ? … : 1)` and friends),
+ * which says nothing about any one machine and would report an unresolved batch
+ * size for all 214 of them.
  */
 const builderText = (chain: JavaClass[]): string => {
   const parts: string[] = [];
 
-  for (const method of ['createProcessingLogic', 'createOverclockCalculator']) {
-    const owner = chain.find(klass => methodBody(klass, method) !== undefined);
+  for (const method of [
+    'createProcessingLogic',
+    'createOverclockCalculator',
+    'setupProcessingLogic',
+  ]) {
+    const owner = chain.find(
+      klass =>
+        klass.name !== ROOT_CONTROLLER &&
+        methodBody(klass, method) !== undefined,
+    );
     if (owner === undefined) continue;
     const body = methodBody(owner, method);
     if (body !== undefined) parts.push(body.text);
@@ -510,7 +526,9 @@ const readMachine = (
 
   const reader: Reader = {
     chain,
-    options: { constants: folded, configKeys, fields },
+    // `owner` is the class as written, not the display name: it is what scopes
+    // a structure param declared for one controller alone
+    options: { constants: folded, configKeys, fields, owner: klass.name },
     note,
   };
 

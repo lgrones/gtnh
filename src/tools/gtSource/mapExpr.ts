@@ -1,7 +1,11 @@
 import type { Expr, MachineParam } from '@/domain/machines/types';
 
 import { withoutThis, type JavaExpr } from './javaExpr';
-import { STRUCTURE_GETTERS, STRUCTURE_PARAMS } from './structureParams';
+import {
+  STRUCTURE_GETTERS,
+  STRUCTURE_PARAMS,
+  type StructureParam,
+} from './structureParams';
 
 // Pass three, part two: what the Java *means*.
 //
@@ -28,6 +32,12 @@ export interface MapOptions {
    * so `mHeatingCapacity` can stand for what checkMachine assigned to it
    */
   fields?: Record<string, JavaExpr>;
+  /**
+   * The controller class being read. Structure params scoped with `only` are in
+   * scope for it alone — `tier` means the coke oven's casing on the coke oven
+   * and nothing at all anywhere else
+   */
+  owner?: string;
 }
 
 export interface Mapped {
@@ -50,6 +60,12 @@ const COIL_NAMES = new Set([
   'mHeatingCapacity',
   'coilHeat',
 ]);
+
+// Names that hold a coil's TIER rather than its heat in K. Both readings are
+// in the wild and they are off by orders of magnitude, so a name is listed in
+// exactly one of the two sets: `mCoilTier = checkCoil.getTier()` in the
+// Chemical Plant, against `mHeatingCapacity = coil.getHeat()` in the EBF
+const COIL_TIER_NAMES = new Set(['mCoilTier']);
 
 const COIL_PARAM: MachineParam = {
   id: 'coil',
@@ -84,6 +100,15 @@ const isMaxInputVoltage = (
     isMaxInputVoltage(aliased, known, new Set([...seen, head]))
   );
 };
+
+// a structure param the class being read is allowed to see
+const inScope = (
+  structure: StructureParam | undefined,
+  owner: string | undefined,
+): structure is StructureParam =>
+  structure !== undefined &&
+  (structure.only === undefined ||
+    (owner !== undefined && structure.only.includes(owner)));
 
 const mentionsCoil = (path: string[]) =>
   path.some(segment => COIL_NAMES.has(segment));
@@ -195,7 +220,7 @@ export const mapJava = (node: JavaExpr, options: MapOptions): Mapped => {
       if (constant !== undefined) return constant;
 
       const structure = STRUCTURE_PARAMS[head];
-      if (structure !== undefined)
+      if (inScope(structure, options.owner))
         return `param.${declare(structure.param).id}`;
 
       const assigned = options.fields?.[head];
@@ -208,6 +233,8 @@ export const mapJava = (node: JavaExpr, options: MapOptions): Mapped => {
         }
       }
 
+      if (COIL_TIER_NAMES.has(head))
+        return `param.${declare(COIL_PARAM).id}.tier`;
       if (COIL_NAMES.has(head)) return `param.${declare(COIL_PARAM).id}.heat`;
     }
 
@@ -244,7 +271,7 @@ export const mapJava = (node: JavaExpr, options: MapOptions): Mapped => {
       const field = STRUCTURE_GETTERS[last];
       const structure =
         field === undefined ? undefined : STRUCTURE_PARAMS[field];
-      if (structure !== undefined)
+      if (inScope(structure, options.owner))
         return `param.${declare(structure.param).id}`;
     }
 
