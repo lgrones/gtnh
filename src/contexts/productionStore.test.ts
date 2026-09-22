@@ -60,7 +60,7 @@ const completeRecipe = (recipe: string) =>
 
 beforeEach(() => {
   vi.useFakeTimers();
-  store.setState({ nodes: [], edges: [], generator: null });
+  store.setState({ nodes: [], edges: [], generatorBank: null });
   vi.runAllTimers();
 });
 
@@ -1639,33 +1639,37 @@ describe('reset', () => {
     expect(state().nodes).toEqual(nodes);
   });
 
-  it('clears the generator selection', () => {
-    state().setGenerator({ categoryId: 'diesel', fuelName: 'Diesel' });
+  it('clears the generator bank', () => {
+    state().setGeneratorBank([]);
 
     state().reset();
 
-    expect(state().generator).toBeNull();
+    expect(state().generatorBank).toBeNull();
   });
 });
 
-describe('setGenerator', () => {
-  it('stores the per-graph generator selection', () => {
-    state().setGenerator({ categoryId: 'diesel', fuelName: 'Diesel' });
+describe('setGeneratorBank', () => {
+  it('stores the per-graph bank', () => {
+    const bank = [
+      {
+        id: 'row-1',
+        categoryId: 'gas' as const,
+        tier: 'HV' as const,
+        fuelName: 'Benzene',
+        count: 2,
+      },
+    ];
+    state().setGeneratorBank(bank);
 
-    expect(state().generator).toEqual({
-      categoryId: 'diesel',
-      fuelName: 'Diesel',
-    });
+    expect(state().generatorBank).toEqual(bank);
   });
 
-  it('overwrites a previous selection', () => {
-    state().setGenerator({ categoryId: 'diesel', fuelName: null });
-    state().setGenerator({ categoryId: 'gas', fuelName: 'Methane' });
+  it('goes back to the suggestion when the bank is cleared', () => {
+    state().setGeneratorBank([]);
+    state().setGeneratorBank(null);
 
-    expect(state().generator).toEqual({
-      categoryId: 'gas',
-      fuelName: 'Methane',
-    });
+    // null is not an empty bank: it is the panel sizing one for you again
+    expect(state().generatorBank).toBeNull();
   });
 });
 

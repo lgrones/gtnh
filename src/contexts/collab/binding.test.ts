@@ -16,12 +16,7 @@ let graph: YjsGraph;
 let binding: Binding;
 
 beforeEach(() => {
-  useProductionStore.setState({
-    nodes: [],
-    edges: [],
-    generator: null,
-    generatorBank: null,
-  });
+  useProductionStore.setState({ nodes: [], edges: [], generatorBank: null });
   graph = createGraphDoc();
   binding = bindStore(graph);
 });
@@ -88,42 +83,7 @@ describe('binding: echo guard', () => {
 });
 
 describe('binding: per-graph settings', () => {
-  it('mirrors the generator selection into the doc so it travels with the graph', () => {
-    useProductionStore.setState({
-      generator: { categoryId: 'diesel', fuelName: null },
-    });
-
-    expect(graph.meta.get('generator')).toEqual({
-      categoryId: 'diesel',
-      fuelName: null,
-    });
-  });
-
-  it('deletes the key rather than storing the default', () => {
-    useProductionStore.setState({
-      generator: { categoryId: 'diesel', fuelName: null },
-    });
-    useProductionStore.setState({ generator: null });
-
-    // a graph nobody picked a generator for carries no entry for it, so an old
-    // snapshot and a deliberately-cleared one look the same on the wire
-    expect(graph.meta.has('generator')).toBe(false);
-  });
-
-  it('applies a remote generator selection into the store', () => {
-    graph.doc.transact(
-      () =>
-        graph.meta.set('generator', { categoryId: 'steam', fuelName: null }),
-      'rtdb',
-    );
-
-    expect(useProductionStore.getState().generator).toEqual({
-      categoryId: 'steam',
-      fuelName: null,
-    });
-  });
-
-  it('mirrors a hand-built generator bank the same way', () => {
+  it('mirrors a hand-built generator bank into the doc so it travels with the graph', () => {
     const bank = [
       {
         id: 'row-1',
@@ -168,15 +128,11 @@ describe('binding: per-graph settings', () => {
     ]);
   });
 
-  it('reads a graph with no stored selection as unpicked', () => {
-    graph.doc.transact(
-      () =>
-        graph.meta.set('generator', { categoryId: 'steam', fuelName: null }),
-      'rtdb',
-    );
-    graph.doc.transact(() => graph.meta.delete('generator'), 'rtdb');
+  it('reads a graph with no stored bank as untouched', () => {
+    graph.doc.transact(() => graph.meta.set('generatorBank', []), 'rtdb');
+    graph.doc.transact(() => graph.meta.delete('generatorBank'), 'rtdb');
 
-    expect(useProductionStore.getState().generator).toBeNull();
+    expect(useProductionStore.getState().generatorBank).toBeNull();
   });
 });
 
@@ -186,14 +142,18 @@ describe('binding: switching graphs', () => {
     // store, then bind the next doc. Getting that order wrong would push the
     // outgoing graph's settings into the incoming one, which is invisible until
     // someone opens an unrelated line and finds it running on someone else's
-    // generator
-    useProductionStore
-      .getState()
-      .setGenerator({ categoryId: 'diesel', fuelName: null });
-    expect(graph.meta.get('generator')).toEqual({
-      categoryId: 'diesel',
-      fuelName: null,
-    });
+    // generators
+    const bank = [
+      {
+        id: 'row-1',
+        categoryId: 'gas',
+        tier: 'HV' as const,
+        fuelName: 'Benzene',
+        count: 2,
+      },
+    ];
+    useProductionStore.getState().setGeneratorBank(bank);
+    expect(graph.meta.get('generatorBank')).toEqual(bank);
 
     binding.destroy();
     useProductionStore.getState().reset();
@@ -201,8 +161,8 @@ describe('binding: switching graphs', () => {
     const next = createGraphDoc();
     const nextBinding = bindStore(next);
 
-    expect(next.meta.get('generator')).toBeUndefined();
-    expect(useProductionStore.getState().generator).toBeNull();
+    expect(next.meta.get('generatorBank')).toBeUndefined();
+    expect(useProductionStore.getState().generatorBank).toBeNull();
 
     nextBinding.destroy();
     next.doc.destroy();

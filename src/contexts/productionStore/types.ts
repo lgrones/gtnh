@@ -250,14 +250,6 @@ export interface Clipboard {
   edges: Edge[];
 }
 
-// per-graph generator picker selection for the energy panel. `fuelName` null
-// means "default to the category's first fuel". stored per graph (mirrored into
-// the Yjs doc), so each graph keeps its own choice.
-export interface GeneratorSelection {
-  categoryId: string;
-  fuelName: string | null;
-}
-
 // One line of a hand-built generator bank: so many of one generator variant,
 // burning one fuel. The variant is named by its category and TIER rather than
 // its display name, because a category may spell several of them the same
@@ -307,9 +299,6 @@ export interface ProductionState {
 
   // per-graph generator selection (null until the user picks one). mirrored to
   // the Yjs doc by the collab binding, so it's saved + synced with the graph.
-  generator: GeneratorSelection | null;
-  setGenerator: (selection: GeneratorSelection) => void;
-
   // the bank as the user built it. `null` means nobody has touched it and the
   // panel is showing what `suggestBank` makes of the picker above — materialised
   // into rows the moment they edit one

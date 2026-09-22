@@ -17,7 +17,6 @@ export type {
   EdgeData,
   EnergyHatch,
   GeneratorBankEntry,
-  GeneratorSelection,
   InputNodeData,
   LineCapture,
   LineNodeData,
@@ -76,19 +75,11 @@ export const useProductionStore = create<ProductionState>()((set, get) => ({
   ...createNodeDataSlice(set, get),
   ...createClipboardSlice(set, get),
 
-  generator: null,
-  setGenerator: selection => set({ generator: selection }),
-
   generatorBank: null,
   setGeneratorBank: entries => set({ generatorBank: entries }),
 
   reset: (nodes = [], edges = []) =>
-    set({
-      nodes: normalizeNodes(nodes),
-      edges,
-      generator: null,
-      generatorBank: null,
-    }),
+    set({ nodes: normalizeNodes(nodes), edges, generatorBank: null }),
 }));
 
 // every item name used anywhere in the graph, offered as completions wherever

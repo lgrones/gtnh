@@ -50,28 +50,21 @@ export const EnergyPanel = () => {
 
   const byTier = useMemo(() => demandByTier(nodes), [nodes]);
 
-  // picker selection lives in the store so it's saved + synced per graph (tier
-  // is solved per machine). null fields fall back to the first category/fuel.
-  const generator = useProductionStore(state => state.generator);
-  const setGenerator = useProductionStore(state => state.setGenerator);
+  // the bank lives in the store so it is saved and synced per graph
   const bank = useProductionStore(state => state.generatorBank);
   const setBank = useProductionStore(state => state.setGeneratorBank);
 
-  const categoryId = generator?.categoryId ?? GENERATORS[0]?.id ?? '';
-  const fuelName = generator?.fuelName ?? null;
-
-  const category = GENERATORS.find(c => c.id === categoryId) ?? GENERATORS[0];
-  const fuel =
-    category?.fuels.find(f => f.name === fuelName) ?? category?.fuels[0];
+  // what an untouched line is sized in: steam, the one every base has before
+  // it has anything else. It is a starting point, not a setting — everything
+  // past the first edit is whatever rows the user built
+  const category = GENERATORS.find(c => c.id === 'steam') ?? GENERATORS[0];
+  const fuel = category?.fuels[0];
 
   // GENERATORS is a non-empty static table, so these are always defined; the
   // guard satisfies noUncheckedIndexedAccess without a non-null assertion
   if (!category || !fuel) return null;
 
-  // an untouched bank follows the picker: the same sizing this panel has always
-  // shown, live, until someone edits a row and it becomes theirs
-  const suggested = suggestBank(category, fuel, byTier);
-  const entries = bank ?? suggested;
+  const entries = bank ?? suggestBank(category, fuel, byTier);
   const custom = bank !== null;
   const plan = resolveBank(entries, demand);
 
@@ -87,75 +80,32 @@ export const EnergyPanel = () => {
         value={`${fmt(demand, 1)} EU/t`}
       />
 
-      {/* this pair does not describe the bank — it is what `suggestBank` is
-          asked for, and what "Reset to suggestion" goes back to */}
-      <Divider label="Suggest from" />
+      {byTier.size > 0 && (
+        <>
+          <Divider label="By tier" labelPosition="center" />
 
-      <Select
-        label="Type"
-        data={GENERATORS.map(c => ({ value: c.id, label: c.name }))}
-        value={categoryId}
-        onChange={value => {
-          if (!value) return;
-          // re-default the fuel to the new category
-          setGenerator({ categoryId: value, fuelName: null });
-          // the picker only drives the suggestion, so a bank someone built by
-          // hand is left exactly as they built it
-          if (!custom) setBank(null);
-        }}
-        allowDeselect={false}
-        comboboxProps={{ withinPortal: true }}
-      />
-
-      <Select
-        label="Fuel"
-        searchable
-        data={category.fuels.map(f => ({
-          value: f.name,
-          label: `${f.name} · ${fmt(f.value, 1)} EU/${category.unit}`,
-        }))}
-        value={fuel.name}
-        onChange={value => setGenerator({ categoryId, fuelName: value })}
-        allowDeselect={false}
-        comboboxProps={{ withinPortal: true }}
-      />
-
-      <Divider variant="dashed" />
-
-      <Stat
-        icon={
-          <IconSettingsBolt
-            size={16}
-            color="var(--mantine-color-yellow-filled)"
-          />
-        }
-        label="Bank output"
-      >
-        <Text size="sm" c={plan.shortfall > 0 ? 'red' : undefined}>
-          {fmt(plan.output, 1)} / {fmt(demand, 1)} EU/t
-          {plan.shortfall > 0
-            ? ` · ${fmt(plan.shortfall, 1)} short`
-            : plan.output > 0 && ` · ${fmt(plan.duty * 100)}% loaded`}
-        </Text>
-      </Stat>
-
-      <Stat
-        icon={
-          <IconFlame size={16} color="var(--mantine-color-orange-filled)" />
-        }
-        label="Fuel"
-      >
-        {plan.fuels.length > 0
-          ? plan.fuels.map(entry => (
-              <Text size="sm" key={`${entry.name}:${entry.unit}`}>
-                {entry.name} · {fmt(entry.rate, 2)} {entry.unit}/s
-              </Text>
-            ))
-          : '-'}
-      </Stat>
+          {/* what draws the power, tier by tier. A reading rather than a rule:
+              the bank is pooled, so a transformer chain is assumed to carry
+              whatever tier a generator's output lands on */}
+          <Stack gap={2}>
+            {[...byTier]
+              .sort(([a], [b]) => TIER_EU[a] - TIER_EU[b])
+              .map(([tier, entry]) => (
+                <Group key={tier} justify="space-between" gap="xs">
+                  <Text size="sm" fw={600}>
+                    {tier}
+                  </Text>
+                  <Text size="sm" c="dimmed">
+                    {fmt(entry.power, 1)} EU/t · {fmt(entry.amps, 1)}A
+                  </Text>
+                </Group>
+              ))}
+          </Stack>
+        </>
+      )}
 
       <Divider
-        label={custom ? 'Bank' : 'Bank (suggested)'}
+        label={custom ? 'Generators' : 'Generators (suggested)'}
         labelPosition="center"
       />
 
@@ -211,29 +161,39 @@ export const EnergyPanel = () => {
         )}
       </Group>
 
-      {byTier.size > 0 && (
-        <>
-          <Divider label="Demand by tier" labelPosition="center" />
+      <Divider variant="dashed" />
 
-          {/* what draws the power, tier by tier. A reading rather than a rule:
-              the bank is pooled, so a transformer chain is assumed to carry
-              whatever tier a generator's output lands on */}
-          <Stack gap={2}>
-            {[...byTier]
-              .sort(([a], [b]) => TIER_EU[a] - TIER_EU[b])
-              .map(([tier, entry]) => (
-                <Group key={tier} justify="space-between" gap="xs">
-                  <Text size="sm" fw={600}>
-                    {tier}
-                  </Text>
-                  <Text size="sm" c="dimmed">
-                    {fmt(entry.power, 1)} EU/t · {fmt(entry.amps, 1)}A
-                  </Text>
-                </Group>
-              ))}
-          </Stack>
-        </>
-      )}
+      <Stat
+        icon={
+          <IconSettingsBolt
+            size={16}
+            color="var(--mantine-color-yellow-filled)"
+          />
+        }
+        label="Bank output"
+      >
+        <Text size="sm" c={plan.shortfall > 0 ? 'red' : undefined}>
+          {fmt(plan.output, 1)} / {fmt(demand, 1)} EU/t
+          {plan.shortfall > 0
+            ? ` · ${fmt(plan.shortfall, 1)} short`
+            : plan.output > 0 && ` · ${fmt(plan.duty * 100)}% loaded`}
+        </Text>
+      </Stat>
+
+      <Stat
+        icon={
+          <IconFlame size={16} color="var(--mantine-color-orange-filled)" />
+        }
+        label="Fuel"
+      >
+        {plan.fuels.length > 0
+          ? plan.fuels.map(entry => (
+              <Text size="sm" key={`${entry.name}:${entry.unit}`}>
+                {entry.name} · {fmt(entry.rate, 2)} {entry.unit}/s
+              </Text>
+            ))
+          : '-'}
+      </Stat>
 
       {demand <= 0 && (
         <Text size="sm" c="dimmed">
