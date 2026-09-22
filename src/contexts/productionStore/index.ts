@@ -16,6 +16,7 @@ export type {
   ByproductNodeData,
   EdgeData,
   EnergyHatch,
+  GeneratorBankEntry,
   GeneratorSelection,
   InputNodeData,
   LineCapture,
@@ -78,8 +79,16 @@ export const useProductionStore = create<ProductionState>()((set, get) => ({
   generator: null,
   setGenerator: selection => set({ generator: selection }),
 
+  generatorBank: null,
+  setGeneratorBank: entries => set({ generatorBank: entries }),
+
   reset: (nodes = [], edges = []) =>
-    set({ nodes: normalizeNodes(nodes), edges, generator: null }),
+    set({
+      nodes: normalizeNodes(nodes),
+      edges,
+      generator: null,
+      generatorBank: null,
+    }),
 }));
 
 // every item name used anywhere in the graph, offered as completions wherever

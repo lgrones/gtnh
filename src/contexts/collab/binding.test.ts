@@ -16,7 +16,12 @@ let graph: YjsGraph;
 let binding: Binding;
 
 beforeEach(() => {
-  useProductionStore.setState({ nodes: [], edges: [], generator: null });
+  useProductionStore.setState({
+    nodes: [],
+    edges: [],
+    generator: null,
+    generatorBank: null,
+  });
   graph = createGraphDoc();
   binding = bindStore(graph);
 });
@@ -116,6 +121,51 @@ describe('binding: per-graph settings', () => {
       categoryId: 'steam',
       fuelName: null,
     });
+  });
+
+  it('mirrors a hand-built generator bank the same way', () => {
+    const bank = [
+      {
+        id: 'row-1',
+        categoryId: 'gas',
+        tier: 'HV' as const,
+        fuelName: 'Benzene',
+        count: 2,
+      },
+    ];
+    useProductionStore.setState({ generatorBank: bank });
+
+    expect(graph.meta.get('generatorBank')).toEqual(bank);
+  });
+
+  it('tells an untouched bank apart from one emptied on purpose', () => {
+    useProductionStore.setState({ generatorBank: [] });
+    // an empty array is someone deleting every row, and has to survive the
+    // round trip as one — `null` is what means "still following the suggestion"
+    expect(graph.meta.get('generatorBank')).toEqual([]);
+
+    useProductionStore.setState({ generatorBank: null });
+    expect(graph.meta.has('generatorBank')).toBe(false);
+  });
+
+  it('applies a remote bank into the store', () => {
+    graph.doc.transact(
+      () =>
+        graph.meta.set('generatorBank', [
+          {
+            id: 'row-1',
+            categoryId: 'naquadah',
+            tier: 'IV',
+            fuelName: 'Tiberium Rod',
+            count: 1,
+          },
+        ]),
+      'rtdb',
+    );
+
+    expect(useProductionStore.getState().generatorBank).toMatchObject([
+      { categoryId: 'naquadah', tier: 'IV', count: 1 },
+    ]);
   });
 
   it('reads a graph with no stored selection as unpicked', () => {

@@ -2887,3 +2887,32 @@ describe('steadyRates — what a running line actually moves', () => {
     ).toBeCloseTo(20);
   });
 });
+
+describe('the generator bank', () => {
+  it('keeps an untouched bank apart from one emptied on purpose', () => {
+    // null is "still following the suggestion"; an empty array is someone
+    // having deleted every row, and the panel must not re-suggest over it
+    expect(state().generatorBank).toBeNull();
+
+    state().setGeneratorBank([]);
+    expect(state().generatorBank).toEqual([]);
+
+    state().setGeneratorBank(null);
+    expect(state().generatorBank).toBeNull();
+  });
+
+  it('leaves the bank behind with the graph it was built for', () => {
+    state().setGeneratorBank([
+      {
+        id: 'row-1',
+        categoryId: 'gas',
+        tier: 'HV',
+        fuelName: 'Benzene',
+        count: 2,
+      },
+    ]);
+    state().reset();
+
+    expect(state().generatorBank).toBeNull();
+  });
+});

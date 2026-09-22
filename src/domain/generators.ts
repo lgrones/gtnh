@@ -1,5 +1,6 @@
 import {
   VOLTAGE_TIERS,
+  type GeneratorBankEntry,
   type TierDemand,
   type VoltageTier,
 } from '@/contexts/productionStore';
@@ -401,4 +402,166 @@ export const planBank = (
   }
 
   return { rows, totalCount, totalFuelRate, unpowered };
+};
+
+// ---------------------------------------------------------------------------
+// a hand-built bank
+// ---------------------------------------------------------------------------
+
+// declared with the rest of the persisted graph state, re-exported here so a
+// caller reading the generator table keeps reading one module
+export type BankEntry = GeneratorBankEntry;
+
+export const bankEntry = (
+  categoryId: string,
+  tier: VoltageTier,
+  fuelName: string,
+  count = 1,
+): BankEntry => ({
+  id: crypto.randomUUID(),
+  categoryId,
+  tier,
+  fuelName,
+  count,
+});
+
+// one entry resolved against the catalog and against what the line draws.
+// `category`, `variant` and `fuel` are undefined when a saved bank names
+// something this table no longer has — the row stays, and says so
+export interface BankRow {
+  entry: BankEntry;
+  category: GeneratorCategory | undefined;
+  variant: GeneratorTier | undefined;
+  fuel: Fuel | undefined;
+  output: number; // EU/t with every unit of this row running flat out
+  drawn: number; // EU/t it actually carries once the bank throttles
+  fuelRate: number; // fuel units per second at `drawn`
+}
+
+// what one fuel costs to run the bank, summed over every row burning it
+export interface FuelDraw {
+  name: string;
+  unit: 'L' | 'item';
+  rate: number;
+}
+
+export interface Bank {
+  rows: BankRow[];
+  output: number; // Σ capacity, EU/t
+  drawn: number; // what the line takes of it
+  shortfall: number; // EU/t the bank cannot cover
+  duty: number; // drawn / output — generators idle rather than void fuel
+  fuels: FuelDraw[];
+}
+
+/**
+ * Resolve a hand-built bank against the line's draw.
+ *
+ * Generators are pooled: a transformer chain is assumed, so any output covers
+ * any demand and the tier a machine sits at is a reading rather than a rule.
+ * Everything in the bank throttles together — GregTech generators do not burn
+ * fuel into a full buffer — so each row carries its share of the draw and burns
+ * for that, not for what it could have made.
+ */
+export const resolveBank = (entries: BankEntry[], demand: number): Bank => {
+  const resolved = entries.map(entry => {
+    const category = GENERATORS.find(c => c.id === entry.categoryId);
+    const variant = category?.tiers.find(t => t.tier === entry.tier);
+    const fuel = category?.fuels.find(f => f.name === entry.fuelName);
+    const count = Math.max(0, entry.count);
+
+    return {
+      entry,
+      category,
+      variant,
+      fuel,
+      output: variant === undefined ? 0 : count * TIER_EU[variant.tier],
+    };
+  });
+
+  const output = resolved.reduce((sum, row) => sum + row.output, 0);
+  const drawn = Math.min(demand, output);
+  const duty = output > 0 ? drawn / output : 0;
+
+  const rows: BankRow[] = resolved.map(row => {
+    const carried = row.output * duty;
+
+    return {
+      ...row,
+      drawn: carried,
+      fuelRate:
+        row.variant === undefined ||
+        row.fuel === undefined ||
+        row.fuel.value <= 0
+          ? 0
+          : (carried / row.variant.efficiency / row.fuel.value) * 20,
+    };
+  });
+
+  // one line per fuel, however many rows burn it: what the base has to keep
+  // flowing. Two categories measuring the same name differently would be two
+  // entries, which is why the unit is part of the identity
+  const fuels: FuelDraw[] = [];
+  for (const { fuel, category, fuelRate } of rows) {
+    if (fuel === undefined || category === undefined) continue;
+    const found = fuels.find(
+      entry => entry.name === fuel.name && entry.unit === category.unit,
+    );
+    if (found) found.rate += fuelRate;
+    else fuels.push({ name: fuel.name, unit: category.unit, rate: fuelRate });
+  }
+
+  return {
+    rows,
+    output,
+    drawn,
+    shortfall: Math.max(0, demand - output),
+    duty,
+    fuels,
+  };
+};
+
+/**
+ * A bank to start editing from: what `planBank` sizes per tier, as entries.
+ *
+ * Pooling makes a tier the category cannot reach no longer fatal, so the demand
+ * of those machines is carried by the category's largest variant instead of
+ * being reported as unpowered.
+ */
+export const suggestBank = (
+  category: GeneratorCategory,
+  fuel: Fuel,
+  byTier: Map<VoltageTier, TierDemand>,
+): BankEntry[] => {
+  const plan = planBank(category, fuel, byTier);
+  const entries: BankEntry[] = [];
+
+  for (const row of plan.rows)
+    if (row.generator !== undefined && row.count > 0)
+      entries.push(
+        bankEntry(category.id, row.generator.tier, fuel.name, row.count),
+      );
+
+  // what no variant of this category could be built for, rolled onto its
+  // biggest one
+  const stranded = plan.rows
+    .filter(row => row.generator === undefined)
+    .reduce((sum, row) => sum + row.demand, 0);
+
+  const largest = category.tiers.reduce<GeneratorTier | undefined>(
+    (best, variant) =>
+      best === undefined || TIER_EU[variant.tier] > TIER_EU[best.tier]
+        ? variant
+        : best,
+    undefined,
+  );
+
+  if (stranded > 0 && largest !== undefined) {
+    const count = Math.ceil(stranded / TIER_EU[largest.tier]);
+    const existing = entries.find(entry => entry.tier === largest.tier);
+    if (existing) existing.count += count;
+    else entries.push(bankEntry(category.id, largest.tier, fuel.name, count));
+  }
+
+  return entries;
 };

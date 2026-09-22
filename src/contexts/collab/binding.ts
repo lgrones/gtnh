@@ -4,6 +4,7 @@ import {
   normalizeNodes,
   syncMirrors,
   useProductionStore,
+  type GeneratorBankEntry,
   type GeneratorSelection,
   type ProductionNode,
   type ProductionState,
@@ -133,23 +134,38 @@ export const bindStore = (graph: YjsGraph): Binding => {
   const pullMeta = () => {
     const generator =
       (yMeta.get('generator') as GeneratorSelection | undefined) ?? null;
+    // absent means nobody has edited the bank, and the panel is showing what
+    // the picker above it suggests — a different state from an empty bank,
+    // which is someone having deleted every row
+    const generatorBank =
+      (yMeta.get('generatorBank') as GeneratorBankEntry[] | undefined) ?? null;
 
     applyingRemote = true;
-    useProductionStore.setState({ generator });
+    useProductionStore.setState({ generator, generatorBank });
     applyingRemote = false;
   };
 
   // store → doc: write (or clear) those settings under one transaction. a
   // setting at its default is deleted rather than written, so a graph that
   // never touched one carries no entry for it
-  const pushMeta = ({ generator }: ProductionState) => {
-    if (isDeepEqual(yMeta.get('generator') ?? null, generator)) return;
+  const pushMeta = ({ generator, generatorBank }: ProductionState) => {
+    if (
+      isDeepEqual(yMeta.get('generator') ?? null, generator) &&
+      isDeepEqual(yMeta.get('generatorBank') ?? null, generatorBank)
+    )
+      return;
 
     writingLocal = true;
 
     doc.transact(() => {
       if (generator) yMeta.set('generator', generator);
       else yMeta.delete('generator');
+
+      // the whole bank is one value, so two people editing rows at once is
+      // last-write-wins on the bank rather than on the row — the same deal the
+      // generator picker has always had
+      if (generatorBank) yMeta.set('generatorBank', generatorBank);
+      else yMeta.delete('generatorBank');
     }, LOCAL_ORIGIN);
 
     writingLocal = false;

@@ -258,6 +258,22 @@ export interface GeneratorSelection {
   fuelName: string | null;
 }
 
+// One line of a hand-built generator bank: so many of one generator variant,
+// burning one fuel. The variant is named by its category and TIER rather than
+// its display name, because a category may spell several of them the same
+// (every Acid Generator is called "Acid Generator").
+//
+// Declared here rather than beside the generator table because it is persisted
+// state, and `@/domain/generators` reads this module rather than the other way
+// about.
+export interface GeneratorBankEntry {
+  id: string;
+  categoryId: string;
+  tier: VoltageTier;
+  fuelName: string;
+  count: number;
+}
+
 export interface ProductionState {
   nodes: ProductionNode[];
   edges: Edge[];
@@ -293,6 +309,12 @@ export interface ProductionState {
   // the Yjs doc by the collab binding, so it's saved + synced with the graph.
   generator: GeneratorSelection | null;
   setGenerator: (selection: GeneratorSelection) => void;
+
+  // the bank as the user built it. `null` means nobody has touched it and the
+  // panel is showing what `suggestBank` makes of the picker above — materialised
+  // into rows the moment they edit one
+  generatorBank: GeneratorBankEntry[] | null;
+  setGeneratorBank: (entries: GeneratorBankEntry[] | null) => void;
 
   // replace the whole graph and wipe undo/redo history
   // reset() => empty (new line), reset(nodes, edges) => load a saved line
