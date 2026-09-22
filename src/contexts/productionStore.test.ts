@@ -770,6 +770,98 @@ describe('validateGraph', () => {
   });
 });
 
+describe('validateGraph — one input, several producers', () => {
+  // two producers wired into the same input handle, making `left` and `right`
+  // of the 10 that handle asks for
+  const twoSources = (left: number, right: number) => {
+    const a = addNode('recipeNode');
+    state().renameNode(a, 'Left');
+    const aOut = addOutput(a);
+    state().updateRecipeOutput(a, aOut, { name: 'Ore', quantity: left });
+
+    const b = addNode('recipeNode');
+    state().renameNode(b, 'Right');
+    const bOut = addOutput(b);
+    state().updateRecipeOutput(b, bOut, { name: 'Ore', quantity: right });
+
+    const c = addNode('recipeNode');
+    state().renameNode(c, 'Receiver');
+    const inId = addInput(c);
+    state().updateRecipeInput(c, inId, { name: 'Ore', quantity: 10 });
+
+    state().onConnect({
+      source: a,
+      target: c,
+      sourceHandle: aOut,
+      targetHandle: inId,
+    });
+    state().onConnect({
+      source: b,
+      target: c,
+      sourceHandle: bOut,
+      targetHandle: inId,
+    });
+    for (const recipe of [a, b, c]) completeRecipe(recipe);
+
+    return { a, b, c, aOut };
+  };
+
+  it('adds the producers up rather than charging each the whole demand', () => {
+    twoSources(6, 4);
+
+    expect(validateGraph(state().nodes, state().edges)).toEqual([]);
+  });
+
+  it('reports one deficit against the receiver, for the shortfall of the sum', () => {
+    twoSources(3, 5);
+
+    expect(
+      validateGraph(state().nodes, state().edges).filter(
+        issue => issue.kind === 'deficit',
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        kind: 'deficit',
+        recipe: 'Receiver',
+        item: 'Ore',
+        supply: 8,
+        demand: 10,
+      }),
+    ]);
+  });
+
+  it('charges each producer its share, so the over-producer alone is surplus', () => {
+    twoSources(8, 4);
+
+    // 12 made against 10 asked: each is charged in proportion to what it
+    // makes, so Left owes 10 x 8/12 and is 1 1/3 over
+    expect(
+      validateGraph(state().nodes, state().edges).filter(
+        issue => issue.kind === 'surplus',
+      ),
+    ).toEqual([
+      expect.objectContaining({ kind: 'surplus', recipe: 'Left', supply: 8 }),
+      expect.objectContaining({ kind: 'surplus', recipe: 'Right', supply: 4 }),
+    ]);
+  });
+
+  it("mirrors only this producer's share into its sink", () => {
+    const { a, aOut } = twoSources(6, 6);
+    const sink = addNode('outputNode');
+    state().onConnect({
+      source: a,
+      target: sink,
+      sourceHandle: aOut,
+      targetHandle: null,
+    });
+
+    // 6 made, charged 10 x 6/12 = 5, so 1 is left over — not 6 - 10 = -4
+    expect(
+      state().nodes.find(node => node.id === sink)!.data.quantity,
+    ).toBeCloseTo(1);
+  });
+});
+
 describe('validateGraph — incomplete recipe fields', () => {
   it('flags a recipe missing energy and duration', () => {
     const id = addNode('recipeNode'); // defaults: eu 0, time 0, name "Recipe"

@@ -550,24 +550,76 @@ const recipeItem = (
   kind: 'inputs' | 'outputs',
 ): RecipeItem | undefined => index[kind].get(`${nodeId}:${handleId}`);
 
-// per recipe-output handle, Σ quantity demanded by the downstream recipe inputs
-// it feeds (sinks are not demand — they take the leftover). keyed `${src}:${h}`
+// what one edge charges the output it leaves. A receiving handle's need is
+// split across the outputs wired into it, in proportion to what each of them
+// makes — two producers half-feeding one input each owe half of it. Charging
+// every edge the whole need (what this used to do) made a correctly fed input
+// look short against each of its sources at once. Keyed by edge id.
+const claimByEdge = (index: ItemIndex, edges: Edge[]): Map<string, number> => {
+  // the recipe->recipe edges arriving at each input handle
+  const byInput = new Map<string, Edge[]>();
+
+  for (const edge of edges) {
+    if (!edge.sourceHandle || !edge.targetHandle) continue;
+    if (
+      recipeItem(index, edge.target, edge.targetHandle, 'inputs') === undefined
+    )
+      continue;
+    const key = `${edge.target}:${edge.targetHandle}`;
+    let group = byInput.get(key);
+    if (group === undefined) byInput.set(key, (group = []));
+    group.push(edge);
+  }
+
+  const claims = new Map<string, number>();
+
+  for (const group of byInput.values()) {
+    const first = group[0];
+    if (!first?.targetHandle) continue;
+    const input = recipeItem(index, first.target, first.targetHandle, 'inputs');
+    // the consumer's own scale decides the amount — a recipe's cycles and
+    // parallels per pass, or the copies a sub-line node is built in
+    const scale = index.scales.get(first.target);
+    if (input === undefined || scale === undefined) continue;
+    const needed = input.quantity * scale;
+
+    const made = group.map(edge => {
+      const output = edge.sourceHandle
+        ? recipeItem(index, edge.source, edge.sourceHandle, 'outputs')
+        : undefined;
+      const sourceScale = index.scales.get(edge.source);
+      return output === undefined || sourceScale === undefined
+        ? 0
+        : output.quantity * sourceScale;
+    });
+    const total = made.reduce((sum, quantity) => sum + quantity, 0);
+
+    group.forEach((edge, at) => {
+      // sources that make nothing split the need evenly instead: somebody has
+      // to be charged, or a handle fed by two empty outputs reads as satisfied
+      const share = total > 0 ? (made[at] ?? 0) / total : 1 / group.length;
+      claims.set(edge.id, needed * share);
+    });
+  }
+
+  return claims;
+};
+
+// per recipe-output handle, Σ what the downstream recipe inputs it feeds charge
+// it (sinks are not demand — they take the leftover). keyed `${src}:${h}`
 const demandByOutput = (
   index: ItemIndex,
   edges: Edge[],
+  claims: Map<string, number> = claimByEdge(index, edges),
 ): Map<string, number> => {
   const demand = new Map<string, number>();
 
   for (const edge of edges) {
     if (!edge.sourceHandle || !edge.targetHandle) continue;
-    const input = recipeItem(index, edge.target, edge.targetHandle, 'inputs');
-    if (input === undefined) continue;
-    // the consumer's own scale decides the amount — a recipe's cycles and
-    // parallels per pass, or the copies a sub-line node is built in
-    const scale = index.scales.get(edge.target);
-    if (scale === undefined) continue;
+    const claim = claims.get(edge.id);
+    if (claim === undefined) continue;
     const key = `${edge.source}:${edge.sourceHandle}`;
-    demand.set(key, (demand.get(key) ?? 0) + input.quantity * scale);
+    demand.set(key, (demand.get(key) ?? 0) + claim);
   }
 
   return demand;
@@ -582,20 +634,19 @@ const supplyByInput = (
   index: ItemIndex,
   edges: Edge[],
 ): Map<string, number> => {
-  const claims = demandByOutput(index, edges);
+  const asks = claimByEdge(index, edges);
+  const claims = demandByOutput(index, edges, asks);
   const supplied = new Map<string, number>();
 
   for (const edge of edges) {
     if (!edge.sourceHandle || !edge.targetHandle) continue;
     const output = recipeItem(index, edge.source, edge.sourceHandle, 'outputs');
-    const input = recipeItem(index, edge.target, edge.targetHandle, 'inputs');
-    if (output === undefined || input === undefined) continue;
+    if (output === undefined) continue;
 
     const sourceScale = index.scales.get(edge.source);
-    const targetScale = index.scales.get(edge.target);
-    if (sourceScale === undefined || targetScale === undefined) continue;
+    if (sourceScale === undefined) continue;
 
-    const asked = input.quantity * targetScale;
+    const asked = asks.get(edge.id) ?? 0;
     const claimed = claims.get(`${edge.source}:${edge.sourceHandle}`) ?? 0;
     // `claimed` is the sum this edge's `asked` is part of, so it is only zero
     // when nothing was asked at all
@@ -874,6 +925,7 @@ export const validateGraph = (
 ): GraphIssue[] => {
   const index = indexItems(nodes);
   const demand = demandByOutput(index, edges);
+  const supplied = supplyByInput(index, edges);
   const issues: GraphIssue[] = [];
 
   const names = new Map(nodes.map(node => [node.id, node.data.name]));
@@ -885,9 +937,6 @@ export const validateGraph = (
   const fed = new Set<string>();
   // output handle keys absorbed by a sink (leftover handled)
   const absorbed = new Set<string>();
-  // output handle key -> ids of the recipes it feeds, minus any whose input
-  // handle an input leaf tops up
-  const receivers = new Map<string, Set<string>>();
 
   // input handle keys an input leaf feeds. A leaf carries in exactly the
   // shortfall its handle is left with (see syncMirrors), so a handle in here
@@ -914,12 +963,6 @@ export const validateGraph = (
       recipeItem(index, edge.target, edge.targetHandle, 'inputs');
 
     if (input) {
-      if (!toppedUp.has(`${edge.target}:${edge.targetHandle ?? ''}`)) {
-        let set = receivers.get(key);
-        if (set === undefined) receivers.set(key, (set = new Set()));
-        set.add(edge.target);
-      }
-
       // a recipe<->recipe edge whose two item names disagree — usually the
       // aftermath of renaming one side; the link is kept but flagged here
       if (output) {
@@ -974,18 +1017,10 @@ export const validateGraph = (
       const supply = output.quantity * items.scale;
       const slack = balanceEpsilon(supply, needed);
 
-      if (needed > supply + slack)
-        // deficit — blame each receiving recipe
-        for (const recipeId of receivers.get(key) ?? [])
-          issues.push({
-            recipe: names.get(recipeId) ?? '',
-            item: output.name,
-            kind: 'deficit',
-            supply,
-            demand: needed,
-          });
-      else if (!absorbed.has(key) && supply - needed > slack)
-        // leftover with nowhere to go (no sink); includes unconnected outputs
+      // leftover with nowhere to go (no sink); includes unconnected outputs.
+      // An over-subscribed output has none, and what it is short of is the
+      // receiving handles' problem — reported there, once, below
+      if (!absorbed.has(key) && supply - needed > slack)
         issues.push({
           recipe: node.data.name,
           item: output.name,
@@ -995,13 +1030,39 @@ export const validateGraph = (
         });
     }
 
-    for (const input of items.inputs)
-      if (!fed.has(`${node.id}:${input.id}`))
+    // the receiving end: a handle is short when everything wired into it
+    // delivers less than it asks for. Asked here rather than at the producing
+    // output because an input fed by SEVERAL outputs is only short of their
+    // sum — charging each of them the whole need reported one deficit per
+    // source for a line that balances
+    for (const input of items.inputs) {
+      const key = `${node.id}:${input.id}`;
+
+      if (!fed.has(key)) {
         issues.push({
           recipe: node.data.name,
           item: input.name,
           kind: 'unfed',
         });
+        continue;
+      }
+
+      // a leaf carries in exactly the shortfall (see syncMirrors), so this
+      // handle cannot be short however little the recipes wired into it deliver
+      if (toppedUp.has(key)) continue;
+
+      const needed = input.quantity * items.scale;
+      const delivered = supplied.get(key) ?? 0;
+
+      if (needed - delivered > balanceEpsilon(delivered, needed))
+        issues.push({
+          recipe: node.data.name,
+          item: input.name,
+          kind: 'deficit',
+          supply: delivered,
+          demand: needed,
+        });
+    }
   }
 
   return issues;
