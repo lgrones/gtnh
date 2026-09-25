@@ -1,0 +1,5 @@
+/* The panel inside does its own scrolling (see common/panel), so the pane must
+   not add a second scrollbar around it */
+.pane {
+  overflow: hidden;
+}

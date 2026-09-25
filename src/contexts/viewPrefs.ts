@@ -4,12 +4,6 @@ import { useLocalStorage } from '@mantine/hooks';
 // They live in localStorage rather than in the Yjs document on purpose — a
 // collaborator folding their own line list away should not fold away yours.
 
-// Whether the line list is folded down to its head. Two places read it: the
-// panel, which draws the chevron, and the navbar grid, which has to hand the
-// freed row to the panel below rather than leave it empty.
-export const useLinesCollapsed = () =>
-  useLocalStorage({ key: 'gtnh:lines-collapsed', defaultValue: false });
-
 // Which library folders are unfolded. Same reasoning as above — where you are
 // looking in the tree is yours, not the library's. Folders not in the record
 // default to open (see libPanel): a folder only exists because a line was put
@@ -19,3 +13,13 @@ export const useFoldersExpanded = () =>
     key: 'gtnh:folders-expanded',
     defaultValue: {},
   });
+
+// How each side column is divided between its two panels: the percentage of the
+// column's height the top one gets. Dragged by the splitter between them (see
+// common/splitColumn), and per-browser for the same reason as the fold above —
+// how tall you like your issue list is not part of the line.
+export const useNavSplit = () =>
+  useLocalStorage({ key: 'gtnh:nav-split', defaultValue: 50 });
+
+export const useAsideSplit = () =>
+  useLocalStorage({ key: 'gtnh:aside-split', defaultValue: 50 });

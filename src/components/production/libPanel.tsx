@@ -44,7 +44,7 @@ import {
   useProductionLibrary,
   type Line,
 } from '@/contexts/productionLibrary';
-import { useFoldersExpanded, useLinesCollapsed } from '@/contexts/viewPrefs';
+import { useFoldersExpanded } from '@/contexts/viewPrefs';
 
 // Tree node values have to be unique across the whole tree and stable across a
 // rename, so a line is keyed by its groupId rather than its path — moving a
@@ -456,7 +456,6 @@ const FolderRow = ({
 
 export const LibPanel = () => {
   const lines = useLines();
-  const [collapsed, setCollapsed] = useLinesCollapsed();
   const [storedExpanded, setStoredExpanded] = useFoldersExpanded();
   const [query, setQuery] = useState('');
   const {
@@ -581,25 +580,15 @@ export const LibPanel = () => {
     <Panel
       title="Production Lines"
       gap="xs"
-      collapsed={collapsed}
-      onToggleCollapse={() => setCollapsed(!collapsed)}
       action={
-        <Group gap={4} wrap="nowrap">
-          {collapsed && lines.length > 0 && (
-            <Text size="sm" c="dimmed">
-              {lines.length}
-            </Text>
-          )}
-
-          <ActionIcon
-            variant="subtle"
-            color="gray"
-            onClick={() => void createGraph()}
-            aria-label="New line"
-          >
-            <IconPlus size={16} />
-          </ActionIcon>
-        </Group>
+        <ActionIcon
+          variant="subtle"
+          color="gray"
+          onClick={() => void createGraph()}
+          aria-label="New line"
+        >
+          <IconPlus size={16} />
+        </ActionIcon>
       }
       // the filter belongs with the head: scrolled out of reach it would be
       // unusable exactly when the list is long enough to need it
