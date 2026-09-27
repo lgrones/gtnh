@@ -26,6 +26,7 @@
     "test_coverage",
     "test_result",
     "public",
-    "routeTree.gen.ts"
+    "routeTree.gen.ts",
+    "tools/graphs-emulator.json"
   ]
 }
