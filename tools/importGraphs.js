@@ -12,8 +12,9 @@
  *   2. open https://gtnh-tools.web.app, sign in, then RELOAD (so the cached ID
  *      token is fresh — it expires after an hour)
  *   3. paste this whole file into the console
- *   4. it downloads graphs-prod-backup-<stamp>.json FIRST, then opens a file
- *      picker — choose tools/graphs-emulator.json
+ *   4. it downloads graphs-prod-backup-<stamp>.json FIRST, then puts a button
+ *      at the bottom right of the page — click it and choose
+ *      tools/graphs-emulator.json
  *   5. confirm the prompt; it deletes, writes, then wipes the live tails
  *
  * It uses the ID token the Firebase SDK parks in IndexedDB, so it gets exactly
@@ -101,13 +102,51 @@
   log(`backup of ${backup.length} graphs downloaded — keep it`);
 
   // ---- pick the dump to import ------------------------------------------
+  // a file picker only opens under transient user activation, and the console
+  // paste's activation is spent by the fetches above — so put a button on the
+  // page and let the click that presses it open the dialog
   const file = await new Promise(res => {
     const input = document.createElement('input');
 
     input.type = 'file';
     input.accept = 'application/json,.json';
-    input.onchange = () => res(input.files?.[0] ?? null);
-    input.click();
+
+    const bar = document.createElement('div');
+
+    bar.style.cssText = [
+      'position:fixed',
+      'inset:auto 16px 16px auto',
+      'z-index:2147483647',
+      'display:flex',
+      'gap:8px',
+      'padding:12px',
+      'border-radius:8px',
+      'background:#1a1b1e',
+      'color:#fff',
+      'font:14px system-ui,sans-serif',
+      'box-shadow:0 4px 24px rgba(0,0,0,.5)',
+    ].join(';');
+
+    const done = value => {
+      bar.remove();
+      res(value);
+    };
+
+    const button = (label, onClick) => {
+      const b = document.createElement('button');
+
+      b.textContent = label;
+      b.style.cssText =
+        'padding:8px 12px;border:0;border-radius:6px;cursor:pointer;font:inherit';
+      b.onclick = onClick;
+      bar.append(b);
+    };
+
+    input.onchange = () => done(input.files?.[0] ?? null);
+    button('Choose graphs-emulator.json', () => input.click());
+    button('Cancel', () => done(null));
+    document.body.append(bar);
+    log('pick the dump with the button at the bottom right of the page');
   });
   if (!file) throw new Error('no file chosen — aborted, nothing changed');
 
@@ -197,9 +236,11 @@
   let wiped = 0;
 
   for (const id of touched) {
-    const res = await fetch(`${RTDB}/live/${id}/updates.json`, {
+    // Realtime Database's REST API takes a Firebase ID token as `?auth=`; the
+    // `Authorization: Bearer` header Firestore wants is for OAuth2 access
+    // tokens and answers 401 here (the emulator is the other way round)
+    const res = await fetch(`${RTDB}/live/${id}/updates.json?auth=${token}`, {
       method: 'DELETE',
-      headers: auth,
     });
     if (res.ok) wiped += 1;
     else log(`tail ${id}: ${res.status} ${await res.text()}`);
