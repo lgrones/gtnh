@@ -22,7 +22,7 @@ firebase-debug.log
 database-debug.log
 firestore-debug.log
 ui-debug.log
-emulator-data/
+emulator-data*/
 
 # Editor directories and files
 .idea
