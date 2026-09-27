@@ -51,6 +51,7 @@ export {
   syncMirrors,
   validateGraph,
   lineEnergy,
+  lineFlow,
   lineMetrics,
   demandByTier,
   recipePower,

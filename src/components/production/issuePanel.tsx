@@ -44,6 +44,11 @@ const issueLabel = (issue: GraphIssue): string => {
       // a recipe fed LESS than it could take just runs at part duty, which is
       // how most of a line runs; one fed nothing at all does not run
       return 'nothing arrives, so it never runs';
+    case 'unsustainable':
+      // the loop gives back less of the item than it takes, so its rates decay
+      // round after round and nothing in it ends up running. Only an outside
+      // feed fixes that — machine counts cannot, the shortfall scales with them
+      return `loop of ${issue.supply ?? 0} recipes returns less than it consumes, so none of them run — feed it from outside`;
     case 'surplus':
       return `${formatRate((issue.supply ?? 0) - (issue.demand ?? 0))}/s unused, no sink`;
     case 'unfed':

@@ -4,6 +4,10 @@
 export const formatRate = (rate: number): string => {
   const size = Math.abs(rate);
 
+  // a stage a lossy loop has brought to a standstill settles at exactly nothing
+  // (see `steadyRates`), and "0.0e+0" reads like a number too small to print
+  if (size === 0) return '0';
+
   if (size >= 100) return rate.toFixed(0);
   if (size >= 10) return rate.toFixed(1);
   if (size >= 0.01) return rate.toFixed(2);

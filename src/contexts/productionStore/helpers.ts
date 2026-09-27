@@ -21,6 +21,7 @@ import {
   type MachineEntry,
   type PlaceableNodeType,
   type ProductionNode,
+  type ProductionNodeType,
   type EnergyHatch,
   type RecipeItem,
   type RecipeKind,
@@ -801,12 +802,59 @@ const balanceEpsilon = (supply: number, demand: number): number =>
 // of what the machine could hold rather than an exact nothing
 const DEAD_FRACTION = 1e-6;
 
+// the loops in a set of nodes: each group of them that can reach each other
+// through edges inside the set. Plain reachability rather than Tarjan's — it
+// runs on the nodes a line has already brought to a standstill, which is a
+// handful, and this way it reads like the definition
+const loops = (ids: string[], edges: Edge[]): string[][] => {
+  const inside = new Set(ids);
+  const next = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (!inside.has(edge.source) || !inside.has(edge.target)) continue;
+    next.set(edge.source, [...(next.get(edge.source) ?? []), edge.target]);
+  }
+
+  // what each node can reach, itself included only when it is on a loop
+  const reach = new Map<string, Set<string>>();
+  for (const id of ids) {
+    const seen = new Set<string>();
+    const queue = [...(next.get(id) ?? [])];
+
+    for (let at = queue.pop(); at !== undefined; at = queue.pop()) {
+      if (seen.has(at)) continue;
+      seen.add(at);
+      queue.push(...(next.get(at) ?? []));
+    }
+
+    reach.set(id, seen);
+  }
+
+  const reaches = (from: string, to: string): boolean =>
+    reach.get(from)?.has(to) ?? false;
+
+  const grouped = new Set<string>();
+  const found: string[][] = [];
+
+  for (const id of ids) {
+    if (grouped.has(id) || !reaches(id, id)) continue;
+
+    const loop = ids.filter(
+      other => other === id || (reaches(id, other) && reaches(other, id)),
+    );
+    for (const member of loop) grouped.add(member);
+    found.push(loop);
+  }
+
+  return found;
+};
+
 // a problem found by validateGraph (run on demand, not while editing)
 export interface GraphIssue {
   recipe: string; // the node the issue belongs to, by display name
   item: string; // item name (or the missing field, for `incomplete`)
   kind:
     | 'starved'
+    | 'unsustainable'
     | 'surplus'
     | 'unfed'
     | 'incomplete'
@@ -818,6 +866,7 @@ export interface GraphIssue {
     | 'unmodeled';
   // surplus: items per SECOND the output makes, and the part of it anything
   //   downstream actually takes
+  // unsustainable: how many recipes the loop holds
   // overparallel: the parallels running under the node's ceiling, and the cap
   //   the machine would otherwise have run
   // underheated: the machine's heat and the recipe's, both in K
@@ -921,6 +970,8 @@ const overclockIssues = (data: RecipeNodeData): GraphIssue[] => {
 //     sink to absorb the rest (includes fully unconnected outputs)
 //   - starved: an input that is wired up and still receives nothing, so the
 //     recipe cannot run at all
+//   - unsustainable: a loop that returns less than it consumes, so every recipe
+//     in it settles at a standstill. One issue for the whole loop
 //   - unfed: a recipe input has no incoming edge (no source at all)
 //
 // everything else here — missing fields, name mismatches, and the machine
@@ -986,6 +1037,54 @@ export const validateGraph = (
           });
       }
     }
+  }
+
+  // a loop that gives back less of an item than it takes has no level it can
+  // run at: the rates in it decay round after round and settle at nothing (see
+  // `steadyRates`). That is one fact about the loop, so it is reported once for
+  // the whole loop — not as a starved handle on every recipe in it, which is
+  // what a line with a recycle in it used to fill the panel with. Mass leaving
+  // the loop as a product or a byproduct is the usual cause, and the cure is an
+  // outside feed for whatever it comes up short of
+  const stopped = nodes
+    .filter(
+      node => rates.dead.has(node.id) && (rates.capacity.get(node.id) ?? 0) > 0,
+    )
+    .map(node => node.id);
+
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const members = (loop: string[]): ProductionNode[] =>
+    loop.flatMap(id => {
+      const node = byId.get(id);
+      return node === undefined ? [] : [node];
+    });
+
+  for (const loop of loops(stopped, edges)) {
+    // is this loop the cause, or a casualty of one upstream? Re-solve it on its
+    // own: cut off from the rest of the graph, its handles from outside read as
+    // unfed, which `steadyRates` treats as supplied. A loop that runs that way
+    // was only ever starved from outside, and saying it cannot sustain itself
+    // would send the user after the wrong recycle
+    const inside = new Set(loop);
+    const alone = steadyRates(
+      members(loop),
+      edges.filter(edge => inside.has(edge.source) && inside.has(edge.target)),
+    );
+    if (loop.every(id => !alone.dead.has(id))) continue;
+
+    // every handle in a loop that cannot sustain itself comes up short — they
+    // hold each other down — so one of them stands for the loop, and the count
+    // says how much of the line went quiet with it
+    const holder = loop.find(id => rates.bound.has(id));
+    const short = holder === undefined ? undefined : rates.bound.get(holder);
+
+    issues.push({
+      recipe: (holder === undefined ? undefined : names.get(holder)) ?? '',
+      item:
+        (short === undefined ? undefined : index.inputs.get(short)?.name) ?? '',
+      kind: 'unsustainable',
+      supply: loop.length,
+    });
   }
 
   for (const node of nodes) {
@@ -1057,6 +1156,10 @@ export const validateGraph = (
       // so this handle always has what it asks for
       if (toppedUp.has(key)) continue;
 
+      // a recipe a dead loop has stopped is reported by that loop, once, rather
+      // than by every handle the stoppage travelled down
+      if (rates.dead.has(node.id)) continue;
+
       // A recipe fed less than its machines could take simply runs at part
       // duty — normal, and every line has stages that do. One fed effectively
       // nothing does not run at all, which is what this catches: a handle that
@@ -1076,7 +1179,9 @@ export const validateGraph = (
       if (
         capacity > 0 &&
         supported < capacity * DEAD_FRACTION &&
-        (sources.get(key) ?? []).some(id => (rates.capacity.get(id) ?? 0) > 0)
+        (sources.get(key) ?? []).some(
+          id => (rates.capacity.get(id) ?? 0) > 0 && !rates.dead.has(id),
+        )
       )
         issues.push({
           recipe: node.data.name,
@@ -1261,6 +1366,44 @@ export interface Entry {
 // the aggregate profile of a whole line, used to compare alternatives side by
 // side. leaf quantities are resolved through syncMirrors first (so they reflect
 // the recipes that feed/drain them); time + demand reuse lineEnergy.
+// What a line hands over and asks for per SECOND, grouped by item name — the
+// same reading the Statistics panel shows, in the shape `lineMetrics` returns
+// its per-pass amounts.
+//
+// This is what two alternatives are compared on. A pass is only the ratio each
+// one is written in: one line's pass is three Sifter cycles and another's is
+// sixteen, so compared per pass the second reads as "the same output, five times
+// the time" when both hand over platinum at the same rate (see `steadyRates`)
+export const lineFlow = (
+  nodes: ProductionNode[],
+  edges: Edge[],
+): { inputs: Entry[]; outputs: Entry[]; byproducts: Entry[] } => {
+  // mirrors first, so a leaf carries the name of the item it is wired to even
+  // on a snapshot nobody has opened since the recipe was renamed
+  const synced = syncMirrors(nodes, edges);
+  const { leaves } = steadyRates(synced, edges);
+
+  const flowing = (type: ProductionNodeType): Entry[] => {
+    const totals = new Map<string, number>();
+
+    for (const node of synced) {
+      // a leaf nothing is wired into has no flow to report, and counting it as
+      // zero would read as a measurement
+      if (node.type !== type || !leaves.has(node.id)) continue;
+      const name = node.data.name;
+      totals.set(name, (totals.get(name) ?? 0) + (leaves.get(node.id) ?? 0));
+    }
+
+    return [...totals].map(([name, quantity]) => ({ name, quantity }));
+  };
+
+  return {
+    inputs: flowing('inputNode'),
+    outputs: flowing('outputNode'),
+    byproducts: flowing('byproductNode'),
+  };
+};
+
 export interface LineMetrics {
   inputs: Entry[];
   outputs: Entry[];

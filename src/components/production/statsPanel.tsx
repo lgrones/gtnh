@@ -1,4 +1,4 @@
-import { Text } from '@mantine/core';
+import { Group, Text } from '@mantine/core';
 import {
   IconArrowBigDownLines,
   IconArrowBigUpLines,
@@ -210,16 +210,47 @@ const Items = ({
                 )
               : undefined;
 
+            // a pass's amount is a ratio the line is written in, and an item
+            // whose cycles cannot divide evenly rounds away to nothing in it —
+            // quoting that 0 beside a real flow reads as "needs none". The rate
+            // is the figure worth the column either way
+            const perPass = formatAmount(total);
+            // exactly "the pass amount rounds away to nothing while a real flow
+            // is moving" — not "the pass amount is small". formatAmount keeps
+            // four decimals under 1, so 0.0025 still prints and still means
+            // something; only what it renders as a bare 0 is dropped
+            const vanished =
+              rate !== undefined && rate > 0 && perPass === formatAmount(0);
+
             return (
-              <Text key={name}>
-                {formatAmount(total)} {name}
-                {rate !== undefined && (
-                  <Text span size="xs" c="dimmed">
-                    {' '}
-                    · {formatRate(rate)}/s
+              <Group key={name} gap={6} wrap="nowrap" align="baseline">
+                <Text truncate="end" title={name}>
+                  {name}
+                </Text>
+
+                {/* the flow never wraps under the name and never shrinks: the
+                    name gives way instead. The separator is glued with
+                    non-breaking spaces, so there is no break to take even if a
+                    style below resets `nowrap` */}
+                <Text style={{ whiteSpace: 'nowrap', flexShrink: 0 }} ml="auto">
+                  <Text
+                    span
+                    size="xs"
+                    c="dimmed"
+                    // the exact amount on hover: the placeholder is a true
+                    // bound, but a loose one — `formatAmount` only gives up
+                    // below 0.00005
+                    title={
+                      vanished
+                        ? `${total.toExponential(2)} per pass`
+                        : undefined
+                    }
+                  >
+                    {`${vanished ? '<0.01' : perPass}\u00a0·\u00a0`}
                   </Text>
-                )}
-              </Text>
+                  {rate === undefined ? '-' : `${formatRate(rate)}/s`}
+                </Text>
+              </Group>
             );
           })
         : '-'}

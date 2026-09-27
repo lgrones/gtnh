@@ -27,6 +27,10 @@ describe('formatRate', () => {
     expect(formatRate(0.125)).toBe('0.13');
     expect(formatRate(0.0001)).toBe('1.0e-4');
   });
+
+  it('prints a standstill as nothing, not as a tiny exponent', () => {
+    expect(formatRate(0)).toBe('0');
+  });
 });
 
 describe('formatDuration', () => {

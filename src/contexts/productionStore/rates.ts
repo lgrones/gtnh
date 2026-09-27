@@ -67,6 +67,19 @@ const flowNode = (node: ProductionNode): FlowNode | undefined => {
 export interface LineRates {
   /** Units of work per second each recipe / sub-line actually turns over */
   nodes: Map<string, number>;
+  /**
+   * Nodes a lossy loop leaves stopped altogether. Their rate is exactly zero —
+   * a loop that returns less than it consumes has no level it can run at, and
+   * rounding it off at whatever round the iteration ran out on would report a
+   * dead line as running a billionth of a recipe a second
+   */
+  dead: Set<string>;
+  /**
+   * `${node}:${handle}` of the input handle holding each node below its
+   * machine's capacity, for the node it holds down. Absent for a node running
+   * flat out. This is what says WHERE a dead loop comes up short
+   */
+  bound: Map<string, string>;
   /** Units of work per second each one COULD turn over, if nothing starved it */
   capacity: Map<string, number>;
   /** Items per second each leaf node carries in, or hands out */
@@ -80,8 +93,18 @@ export interface LineRates {
   spare: Map<string, number>;
 }
 
-// rates settle by division, so two that should agree can land a few ULPs apart
+// rates settle by division, so two that should agree can land a few ULPs apart.
+// Compared RELATIVE to the rate itself, deliberately: a loop that returns 95% of
+// what it consumes multiplies its own rate by 0.95 every round, and against an
+// absolute tolerance those steps shrink under it long before the rate reaches
+// anything — a decaying loop would report itself settled at a billionth of a
+// recipe a second, which is how a line that dies out read as a line that runs
 const EPSILON = 1e-9;
+
+// has a rate moved, or is it the same number reached by a different division?
+const settled = (before: number, after: number): boolean =>
+  Math.abs(after - before) <=
+  EPSILON * Math.max(Math.abs(before), Math.abs(after), Number.MIN_VALUE);
 
 // the iteration is monotone in the common case — every rate starts at its
 // machine's capacity and is pushed down by what feeds it — but a consumer that
@@ -89,6 +112,13 @@ const EPSILON = 1e-9;
 // cap keeps a graph that ping-pongs between two allocations from spinning; in
 // practice a line settles in a handful of rounds
 const MAX_ROUNDS = 64;
+
+// a loop that returns less of an item than it consumes has no fixed point above
+// zero: every round multiplies the rates in it by the same fraction, so the
+// iteration never stops, it only gets smaller. Whatever is still coming down
+// when the rounds run out is settled at zero and the rest re-solved around it —
+// each pass stops at least one node, and a line has only so many loops in it
+const MAX_PASSES = 8;
 
 /**
  * What every node and leaf of a line does per second once it is running.
@@ -98,6 +128,12 @@ const MAX_ROUNDS = 64;
  * output that several recipes draw on is shared between them in proportion to
  * what each one asks for. An input leaf is not a limit — it stands for the
  * outside world topping the handle up, exactly as it does per pass.
+ *
+ * A node whose every input is topped up that way is held down from the other
+ * side instead: the outside world hands it what it asks for, so it asks for
+ * what the line can take (see `sourced`). Nothing else is demand-driven — a
+ * stage that cannot keep up with the one above it does not slow it down, the
+ * items back up, which is what `spare` reports.
  */
 export const steadyRates = (
   nodes: ProductionNode[],
@@ -139,6 +175,14 @@ export const steadyRates = (
     nodes.filter(node => SINK_TYPES.has(node.type)).map(node => node.id),
   );
 
+  // output handles a sink is wired to. A sink takes whatever arrives, so an
+  // output with one is never held back by what the recipes below it ask for
+  const drained = new Set(
+    edges
+      .filter(edge => edge.sourceHandle && sinkIds.has(edge.target))
+      .map(edge => `${edge.source}:${edge.sourceHandle ?? ''}`),
+  );
+
   // input handles an input leaf feeds: the leaf carries in whatever the recipes
   // leave short, so a handle in here never holds its node back
   const leafIds = new Set(
@@ -149,6 +193,23 @@ export const steadyRates = (
       .filter(edge => edge.targetHandle && leafIds.has(edge.source))
       .map(edge => `${edge.target}:${edge.targetHandle ?? ''}`),
   );
+
+  // nodes fed only from outside: every input handle they have is one an input
+  // leaf tops up. These are a line's make-up steps — the Chlorine-to-HCl recipe
+  // that covers what a platinum line's recycle cannot — and the outside world
+  // hands them exactly what they ask for. So what they run at is what the line
+  // asks OF them, not what their machines could hold: left at capacity, such a
+  // step charges its leaf for a full machine's worth of an item the line never
+  // took, and reports the difference back as a surplus of its own output
+  const sourced = new Set<string>();
+  for (const [id, shape] of flow) {
+    const handles = shape.inputs.filter(input => input.quantity > 0);
+    if (
+      handles.length > 0 &&
+      handles.every(input => toppedUp.has(`${id}:${input.id}`))
+    )
+      sourced.add(id);
+  }
 
   const rate = new Map<string, number>();
   for (const [id, shape] of flow) rate.set(id, shape.capacity);
@@ -196,31 +257,120 @@ export const steadyRates = (
     return (Math.min(made(edge), claimed) * asked) / claimed;
   };
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    let moved = false;
+  // what the line asks of a node, in units of its work per second: the most
+  // demanding of its outputs. `undefined` means nothing downstream asks at all —
+  // an output with a sink on it, or one wired nowhere — and such a node keeps
+  // running at its capacity, so a dangling step still reads as a surplus rather
+  // than as something nobody wants
+  const pulled = (id: string, shape: FlowNode): number | undefined => {
+    let most: number | undefined;
 
-    for (const [id, shape] of flow) {
-      let limit = shape.capacity;
+    for (const output of shape.outputs) {
+      const key = `${id}:${output.id}`;
+      if (output.quantity <= 0) continue;
+      if (drained.has(key)) return undefined;
 
-      for (const input of shape.inputs) {
-        const key = `${id}:${input.id}`;
-        // an unfed handle is reported as an issue, not modelled as a stop: a
-        // half-wired line would otherwise read as producing nothing anywhere
-        const feeds = incoming.get(key);
-        if (input.quantity <= 0 || feeds === undefined) continue;
-        if (toppedUp.has(key)) continue;
+      const consumers = outgoing.get(key);
+      if (consumers === undefined) continue;
 
-        const available = feeds.reduce((sum, edge) => sum + delivered(edge), 0);
-        limit = Math.min(limit, available / input.quantity);
+      let need = 0;
+      for (const edge of consumers) {
+        const input = item(edge.target, edge.targetHandle, 'inputs');
+        if (input === undefined) continue;
+        // the WHOLE need of the handle, not this node's share of it. Two
+        // producers into one handle each covering the share their own rate
+        // earns them would pull each other down round after round
+        need += (rate.get(edge.target) ?? 0) * input.quantity;
       }
 
-      if (Math.abs(limit - (rate.get(id) ?? 0)) > EPSILON) {
-        rate.set(id, limit);
-        moved = true;
-      }
+      const asked = need / output.quantity;
+      most = most === undefined ? asked : Math.max(most, asked);
     }
 
-    if (!moved) break;
+    return most;
+  };
+
+  // the input handle each node is held down by, and the nodes a lossy loop has
+  // stopped for good
+  const bound = new Map<string, string>();
+  const dead = new Set<string>();
+
+  // hold every rate down to what feeds it until nothing moves. Returns the nodes
+  // that were still on their way down when the rounds ran out — a lossy loop
+  // approaches zero without ever arriving, so there is nothing else to report
+  // about it than that it is on the way there
+  const relax = (): Set<string> => {
+    // nodes that went UP at some point in this pass. A rate that rises is
+    // taking up supply a neighbour gave back, which is the ping-pong the round
+    // cap is there for — not a loop running out
+    const rose = new Set<string>();
+    let falling = new Set<string>();
+
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      let moved = false;
+      const fell = new Set<string>();
+
+      for (const [id, shape] of flow) {
+        // a stopped loop stays stopped: re-solving around it is the whole point
+        if (dead.has(id)) continue;
+
+        let limit = shape.capacity;
+        let limiter: string | undefined;
+
+        for (const input of shape.inputs) {
+          const key = `${id}:${input.id}`;
+          // an unfed handle is reported as an issue, not modelled as a stop: a
+          // half-wired line would otherwise read as producing nothing anywhere
+          const feeds = incoming.get(key);
+          if (input.quantity <= 0 || feeds === undefined) continue;
+          if (toppedUp.has(key)) continue;
+
+          const available = feeds.reduce(
+            (sum, edge) => sum + delivered(edge),
+            0,
+          );
+          const supported = available / input.quantity;
+          if (supported < limit) {
+            limit = supported;
+            limiter = key;
+          }
+        }
+
+        // a make-up step follows the line's demand rather than its own machine
+        const pull = sourced.has(id) ? pulled(id, shape) : undefined;
+        if (pull !== undefined && pull < limit) {
+          limit = pull;
+          limiter = undefined;
+        }
+
+        if (limiter === undefined) bound.delete(id);
+        else bound.set(id, limiter);
+
+        const before = rate.get(id) ?? 0;
+        if (!settled(before, limit)) {
+          rate.set(id, limit);
+          moved = true;
+          if (limit > before) rose.add(id);
+          else fell.add(id);
+        }
+      }
+
+      if (!moved) return new Set();
+      falling = fell;
+    }
+
+    for (const id of rose) falling.delete(id);
+    return falling;
+  };
+
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    const falling = relax();
+    if (falling.size === 0) break;
+
+    for (const id of falling) {
+      dead.add(id);
+      rate.set(id, 0);
+    }
   }
 
   // what settled, per handle, for the balance checks and the leaves alike
@@ -240,7 +390,10 @@ export const steadyRates = (
         (sum, edge) => sum + delivered(edge),
         0,
       );
-      spare.set(key, made - taken);
+      // an output whose consumers take all of it lands a few ULPs off it, and
+      // that dust is a rate the panels would print ("7.1e-15/s") and a sink
+      // would carry. Nothing left is nothing left
+      spare.set(key, settled(made, taken) ? 0 : made - taken);
     }
 
   // leaves, in the same terms: a sink takes what its output handle has left
@@ -248,16 +401,24 @@ export const steadyRates = (
   // wired into its handle leave short
   const leaves = new Map<string, number>();
 
+  // how many sinks share one output handle. Two labels for the same overflow
+  // each reading all of it double-counts the item in every total built on these
+  const sinksOn = new Map<string, number>();
+  for (const edge of edges) {
+    if (!sinkIds.has(edge.target)) continue;
+    const key = `${edge.source}:${edge.sourceHandle ?? ''}`;
+    sinksOn.set(key, (sinksOn.get(key) ?? 0) + 1);
+  }
+
   for (const edge of edges) {
     const output = item(edge.source, edge.sourceHandle, 'outputs');
-    if (output !== undefined && sinkIds.has(edge.target))
+    if (output !== undefined && sinkIds.has(edge.target)) {
+      const key = `${edge.source}:${edge.sourceHandle ?? ''}`;
       leaves.set(
         edge.target,
-        Math.max(
-          0,
-          spare.get(`${edge.source}:${edge.sourceHandle ?? ''}`) ?? 0,
-        ),
+        Math.max(0, spare.get(key) ?? 0) / (sinksOn.get(key) ?? 1),
       );
+    }
 
     const input = item(edge.target, edge.targetHandle, 'inputs');
     if (input !== undefined && leafIds.has(edge.source)) {
@@ -270,7 +431,7 @@ export const steadyRates = (
   const capacity = new Map<string, number>();
   for (const [id, shape] of flow) capacity.set(id, shape.capacity);
 
-  return { nodes: rate, capacity, leaves, supply, spare };
+  return { nodes: rate, dead, bound, capacity, leaves, supply, spare };
 };
 
 // Every node on the canvas asks this same question of the same two arrays, and

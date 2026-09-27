@@ -12,6 +12,7 @@ import {
   machineAmps,
   machineTier,
   normalizeNodes,
+  lineFlow,
   lineMetrics,
   steadyRates,
   demandByTier,
@@ -1741,7 +1742,54 @@ describe('lineMetrics', () => {
     expect(metrics.demand).toBeCloseTo(120); // 12,000 EU / (5s × 20 ticks)
   });
 
+  // the same line read as a flow. The recipe's multiplier cancels — 3 runs in
+  // sequence move 3× as much over 3× the wall clock — so these are the per-pass
+  // amounts of ONE run per 5 seconds
+  it('reads the same leaves per second, without the multiplier', () => {
+    const { nodes, edges } = buildLine();
+    const flow = lineFlow(nodes, edges);
+
+    expect(flow.inputs).toEqual([{ name: 'Ore', quantity: 0.4 }]);
+    expect(flow.outputs).toEqual([{ name: 'Plate', quantity: 0.8 }]);
+    expect(flow.byproducts).toEqual([{ name: 'Slag', quantity: 0.2 }]);
+  });
+
+  it('adds up two leaves of the same item into one row', () => {
+    const { nodes } = buildLine();
+    const recipe = nodes.find(node => node.type === 'recipeNode')!;
+    const plate = (recipe.data as { outputs: { id: string }[] }).outputs[0]!;
+
+    const second = addNode('outputNode');
+    state().onConnect({
+      source: recipe.id,
+      target: second,
+      sourceHandle: plate.id,
+      targetHandle: null,
+    });
+
+    // both sinks hang off the one Plate output, so between them they carry it
+    // once — two labels for one overflow are not two overflows
+    expect(lineFlow(state().nodes, state().edges).outputs).toEqual([
+      { name: 'Plate', quantity: 0.8 },
+    ]);
+  });
+
+  it('leaves out a leaf nothing is wired into', () => {
+    buildLine();
+    addNode('inputNode');
+
+    expect(lineFlow(state().nodes, state().edges).inputs).toEqual([
+      { name: 'Ore', quantity: 0.4 },
+    ]);
+  });
+
   it('is empty for a graph with no nodes', () => {
+    expect(lineFlow([], [])).toEqual({
+      inputs: [],
+      outputs: [],
+      byproducts: [],
+    });
+
     expect(lineMetrics([], [])).toEqual({
       inputs: [],
       outputs: [],
@@ -2732,16 +2780,126 @@ describe('validateGraph against a loop an input node tops up', () => {
     expect(loop(3, true).filter(issue => issue.kind === 'surplus')).toEqual([]);
   });
 
-  it('reports a loop that decays as starved when no leaf tops it up', () => {
+  it('reports a loop that decays as unsustainable when no leaf tops it up', () => {
     // R2 hands back 3 of the 4 R1 needs, so each round of the loop runs at
     // three quarters of the one before it and the pair grinds to a halt
     expect(loop(3, false)).toContainEqual(
-      expect.objectContaining({ kind: 'starved', recipe: 'R1', item: 'Dust' }),
+      expect.objectContaining({
+        kind: 'unsustainable',
+        recipe: 'R1',
+        item: 'Dust',
+      }),
     );
+  });
+
+  it('reports the decaying loop once, not a starved handle per recipe', () => {
+    // the one fact about the pair is that it cannot sustain itself. Saying it
+    // again as "nothing arrives" on every handle the standstill travelled down
+    // is what filled the panel on any line with a recycle in it
+    expect(loop(3, false)).toHaveLength(1);
+  });
+
+  it('settles a decaying loop at a standstill rather than near one', () => {
+    // the rates in it are multiplied by 3/4 every round, so where they land is
+    // whatever round the iteration stopped on unless the decay is recognised
+    loop(3, false);
+    const { nodes, dead } = steadyRates(state().nodes, state().edges);
+
+    expect([...nodes.values()]).toEqual([0, 0]);
+    expect(dead.size).toBe(2);
   });
 
   it('sustains a loop that returns everything it takes', () => {
     expect(loop(4, false)).toEqual([]);
+  });
+
+  it('catches a loop that only just loses, not merely an obvious one', () => {
+    // 3.96 of the 4 R1 takes: the pair still dies, it only takes hundreds of
+    // rounds rather than dozens. What settles the rates is the RATIO they fall
+    // by, so the test for one that has stopped falling cannot be an absolute
+    // amount — against one, a slow decay reads as a line running at half duty
+    expect(loop(3.96, false)).toContainEqual(
+      expect.objectContaining({ kind: 'unsustainable' }),
+    );
+  });
+});
+
+describe('validateGraph against a loop starved from outside', () => {
+  // a sound pair — R4 gives back every Dust R3 takes — hanging off a lossy one.
+  // The standstill is the first pair's; the second is only waiting on it
+  const chain = () => {
+    const r1 = addNode('recipeNode');
+    completeRecipe(r1);
+    state().renameNode(r1, 'R1');
+    const oreIn = addInput(r1);
+    state().updateRecipeInput(r1, oreIn, { name: 'Ore', quantity: 4 });
+    const crushed = addOutput(r1);
+    state().updateRecipeOutput(r1, crushed, { name: 'Crushed', quantity: 1 });
+
+    const r2 = addNode('recipeNode');
+    completeRecipe(r2);
+    state().renameNode(r2, 'R2');
+    const crushedIn = addInput(r2);
+    state().updateRecipeInput(r2, crushedIn, { name: 'Crushed', quantity: 1 });
+    const oreOut = addOutput(r2);
+    state().updateRecipeOutput(r2, oreOut, { name: 'Ore', quantity: 3 });
+    const dustOut = addOutput(r2);
+    state().updateRecipeOutput(r2, dustOut, { name: 'Dust', quantity: 1 });
+
+    // the sound pair: R3 eats the Dust plus a Flux, R4 hands the Flux back
+    const r3 = addNode('recipeNode');
+    completeRecipe(r3);
+    state().renameNode(r3, 'R3');
+    const dustIn = addInput(r3);
+    state().updateRecipeInput(r3, dustIn, { name: 'Dust', quantity: 1 });
+    const fluxIn = addInput(r3);
+    state().updateRecipeInput(r3, fluxIn, { name: 'Flux', quantity: 1 });
+    const ingotOut = addOutput(r3);
+    state().updateRecipeOutput(r3, ingotOut, { name: 'Ingot', quantity: 1 });
+
+    const r4 = addNode('recipeNode');
+    completeRecipe(r4);
+    state().renameNode(r4, 'R4');
+    const ingotIn = addInput(r4);
+    state().updateRecipeInput(r4, ingotIn, { name: 'Ingot', quantity: 1 });
+    const fluxOut = addOutput(r4);
+    state().updateRecipeOutput(r4, fluxOut, { name: 'Flux', quantity: 1 });
+    const plateOut = addOutput(r4);
+    state().updateRecipeOutput(r4, plateOut, { name: 'Plate', quantity: 1 });
+
+    const wire = (
+      source: string,
+      sourceHandle: string,
+      target: string,
+      targetHandle: string,
+    ) => state().onConnect({ source, target, sourceHandle, targetHandle });
+
+    wire(r1, crushed, r2, crushedIn);
+    wire(r2, oreOut, r1, oreIn);
+    wire(r2, dustOut, r3, dustIn);
+    wire(r3, ingotOut, r4, ingotIn);
+    wire(r4, fluxOut, r3, fluxIn);
+
+    const sink = addNode('outputNode');
+    state().onConnect({
+      source: r4,
+      target: sink,
+      sourceHandle: plateOut,
+      targetHandle: null,
+    });
+
+    return validateGraph(state().nodes, state().edges);
+  };
+
+  it('blames the loop that loses, not the one waiting on it', () => {
+    expect(chain().filter(issue => issue.kind === 'unsustainable')).toEqual([
+      expect.objectContaining({ kind: 'unsustainable', supply: 2 }),
+    ]);
+  });
+
+  it("names one of the lossy loop's own recipes", () => {
+    const [loop] = chain().filter(issue => issue.kind === 'unsustainable');
+    expect(['R1', 'R2']).toContain(loop?.recipe);
   });
 });
 
@@ -2867,6 +3025,92 @@ describe('steadyRates — what a running line actually moves', () => {
     const { leaves } = steadyRates(state().nodes, state().edges);
     expect(leaves.get(plates)).toBeCloseTo(0.1); // full capacity
     expect(leaves.get(feed)).toBeCloseTo(1); // 10 Ore every 10s
+  });
+
+  // a step fed only from outside — a make-up recipe, there to cover what the
+  // line's own recycle cannot. One Salt in, `quantity` Ore out
+  const makeUp = (name: string, quantity: number, seconds: number) => {
+    const id = addNode('recipeNode');
+    state().renameNode(id, name);
+    const input = addInput(id);
+    state().updateRecipeInput(id, input, { name: 'Salt', quantity: 1 });
+    const handle = addOutput(id);
+    state().updateRecipeOutput(id, handle, { name: 'Ore', quantity });
+    state().updateRecipe(id, { eu: 6 * seconds, time: seconds });
+
+    const feed = addNode('inputNode');
+    state().onConnect({
+      source: feed,
+      target: id,
+      sourceHandle: null,
+      targetHandle: input,
+    });
+
+    return { id, handle, feed };
+  };
+
+  it('runs a step fed only from outside at what the line takes from it', () => {
+    const m = makeUp('M', 10, 1); // could make 10 Ore/s
+    const b = eater('B', 10, 10); // wants 1 Ore/s
+    wire(m, b);
+    sink(b.id, b.output);
+
+    const { nodes, capacity } = steadyRates(state().nodes, state().edges);
+    // one tenth of a recipe a second covers the Ore; the machine could hold ten
+    expect(capacity.get(m.id)).toBeCloseTo(1);
+    expect(nodes.get(m.id)).toBeCloseTo(0.1);
+  });
+
+  it('charges its leaf for what it used, not for a full machine', () => {
+    const m = makeUp('M', 10, 1);
+    const b = eater('B', 10, 10);
+    wire(m, b);
+    sink(b.id, b.output);
+
+    // 1 Salt per recipe at a tenth of a recipe a second
+    expect(
+      steadyRates(state().nodes, state().edges).leaves.get(m.feed),
+    ).toBeCloseTo(0.1);
+  });
+
+  it('reports no surplus for the part of it the line never asked for', () => {
+    const m = makeUp('M', 10, 1);
+    const b = eater('B', 10, 10);
+    wire(m, b);
+    sink(b.id, b.output);
+
+    expect(
+      validateGraph(state().nodes, state().edges).filter(
+        issue => issue.kind === 'surplus',
+      ),
+    ).toEqual([]);
+  });
+
+  it('leaves one nothing draws on running flat out, so it still reads surplus', () => {
+    // nothing downstream is not the same as nothing wanted: an unwired step is
+    // a mistake to report, not a machine to quietly switch off
+    const m = makeUp('M', 10, 1);
+
+    expect(
+      steadyRates(state().nodes, state().edges).nodes.get(m.id),
+    ).toBeCloseTo(1);
+    expect(
+      validateGraph(state().nodes, state().edges).some(
+        issue => issue.kind === 'surplus' && issue.item === 'Ore',
+      ),
+    ).toBe(true);
+  });
+
+  it('leaves nothing on an output its consumers take all of', () => {
+    // 3 Ore a second into a recipe that eats them in threes: the division comes
+    // back a few ULPs off, and that dust would read as a rate of its own
+    const a = maker('A', 3, 1);
+    const b = eater('B', 3, 1);
+    wire(a, b);
+    sink(b.id, b.output);
+
+    const { spare } = steadyRates(state().nodes, state().edges);
+    expect(spare.get(`${a.id}:${a.handle}`)).toBe(0);
   });
 
   it("reads a sub-line's turnover off its own slowest step", () => {
