@@ -3,6 +3,7 @@ import { type NodeProps } from '@xyflow/react';
 
 import { type ProductionNode as IProductionNode } from '@/contexts/productionStore';
 
+import { formatAmount } from '../../common/format';
 import { ProductionNode } from './productionNode';
 
 type InputNodeType = Extract<IProductionNode, { type: 'inputNode' }>;
@@ -13,6 +14,6 @@ export const InputNode = (props: NodeProps<InputNodeType>) => (
     type="source"
     color="teal"
     editable={false}
-    leftSection={<Text pr={6}>{props.data.quantity}</Text>}
+    leftSection={<Text pr={6}>{formatAmount(props.data.quantity)}</Text>}
   />
 );

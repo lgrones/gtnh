@@ -22,7 +22,7 @@ firebase-debug.log
 database-debug.log
 firestore-debug.log
 ui-debug.log
-emulator-data/
+emulator-data*/
 
 # Editor directories and files
 .idea
@@ -33,3 +33,9 @@ emulator-data/
 *.sln
 *.sw?
 .tanstack
+
+# dev only
+.gt-cache
+
+# one-off payload for tools/importGraphs.js, regenerate with tools/exportEmulatorGraphs.mjs
+tools/graphs-emulator.json

@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 1,
+  "source": "gregtech/api/enums/HeatingCoilLevel.java @ 5.09.51.482",
+  "coils": [
+    {
+      "id": "none",
+      "enum": "None",
+      "name": "None",
+      "heat": 0,
+      "tier": -2,
+      "ordinal": 0,
+      "available": false
+    },
+    {
+      "id": "ulv_unimplemented",
+      "enum": "ULV",
+      "name": "None",
+      "heat": 901,
+      "tier": -1,
+      "ordinal": 1,
+      "available": false
+    },
+    {
+      "id": "cupronickel",
+      "enum": "LV",
+      "name": "Cupronickel",
+      "heat": 1801,
+      "tier": 0,
+      "ordinal": 2,
+      "available": true
+    },
+    {
+      "id": "kanthal",
+      "enum": "MV",
+      "name": "Kanthal",
+      "heat": 2701,
+      "tier": 1,
+      "ordinal": 3,
+      "available": true
+    },
+    {
+      "id": "nichrome",
+      "enum": "HV",
+      "name": "Nichrome",
+      "heat": 3601,
+      "tier": 2,
+      "ordinal": 4,
+      "available": true
+    },
+    {
+      "id": "tpv",
+      "enum": "EV",
+      "name": "TPV",
+      "heat": 4501,
+      "tier": 3,
+      "ordinal": 5,
+      "available": true
+    },
+    {
+      "id": "hss_g",
+      "enum": "IV",
+      "name": "HSS-G",
+      "heat": 5401,
+      "tier": 4,
+      "ordinal": 6,
+      "available": true
+    },
+    {
+      "id": "hss_s",
+      "enum": "LuV",
+      "name": "HSS-S",
+      "heat": 6301,
+      "tier": 5,
+      "ordinal": 7,
+      "available": true
+    },
+    {
+      "id": "naquadah",
+      "enum": "ZPM",
+      "name": "Naquadah",
+      "heat": 7201,
+      "tier": 6,
+      "ordinal": 8,
+      "available": true
+    },
+    {
+      "id": "naquadah_alloy",
+      "enum": "UV",
+      "name": "Naquadah Alloy",
+      "heat": 8101,
+      "tier": 7,
+      "ordinal": 9,
+      "available": true
+    },
+    {
+      "id": "trinium",
+      "enum": "UHV",
+      "name": "Trinium",
+      "heat": 9001,
+      "tier": 8,
+      "ordinal": 10,
+      "available": true
+    },
+    {
+      "id": "electrum_flux",
+      "enum": "UEV",
+      "name": "Electrum Flux",
+      "heat": 9901,
+      "tier": 9,
+      "ordinal": 11,
+      "available": true
+    },
+    {
+      "id": "awakened_draconium",
+      "enum": "UIV",
+      "name": "Awakened Draconium",
+      "heat": 10801,
+      "tier": 10,
+      "ordinal": 12,
+      "available": true
+    },
+    {
+      "id": "infinity",
+      "enum": "UMV",
+      "name": "Infinity",
+      "heat": 11701,
+      "tier": 11,
+      "ordinal": 13,
+      "available": true
+    },
+    {
+      "id": "hypogen",
+      "enum": "UXV",
+      "name": "Hypogen",
+      "heat": 12601,
+      "tier": 12,
+      "ordinal": 14,
+      "available": true
+    },
+    {
+      "id": "eternal",
+      "enum": "MAX",
+      "name": "Eternal",
+      "heat": 13501,
+      "tier": 13,
+      "ordinal": 15,
+      "available": true
+    }
+  ]
+}

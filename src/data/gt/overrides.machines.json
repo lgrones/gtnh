@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "note": "Human curation, layered over raw.machines.json at merge time. The extractor never writes this file, so re-running it against a new GT version cannot clobber anything here. Every entry states why it exists. Patches are keyed by controller class, which survives a display-name change; objects deep merge and arrays replace wholesale.",
+  "patch": {},
+  "add": [],
+  "drop": {}
+}

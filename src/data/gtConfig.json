@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "source": "pack config values referenced by machine formulas @ 5.09.51.482",
+  "values": { "megaMachinesMax": 256, "bioVatMaxParallelBonus": 1000 }
+}

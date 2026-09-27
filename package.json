@@ -14,6 +14,7 @@
     "format:fix": "oxfmt",
     "types:check": "tsc -b",
     "test": "vitest run",
+    "gt:extract": "vitest run src/tools/extractMachines.test.ts",
     "test:watch": "vitest"
   },
   "dependencies": {

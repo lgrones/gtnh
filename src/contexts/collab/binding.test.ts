@@ -16,7 +16,7 @@ let graph: YjsGraph;
 let binding: Binding;
 
 beforeEach(() => {
-  useProductionStore.setState({ nodes: [], edges: [] });
+  useProductionStore.setState({ nodes: [], edges: [], generatorBank: null });
   graph = createGraphDoc();
   binding = bindStore(graph);
 });
@@ -79,5 +79,144 @@ describe('binding: echo guard', () => {
     useProductionStore.setState({ nodes: [node('n1')] });
     expect(graph.nodes.size).toBe(1);
     expect(useProductionStore.getState().nodes).toHaveLength(1);
+  });
+});
+
+describe('binding: per-graph settings', () => {
+  it('mirrors a hand-built generator bank into the doc so it travels with the graph', () => {
+    const bank = [
+      {
+        id: 'row-1',
+        categoryId: 'gas',
+        tier: 'HV' as const,
+        fuelName: 'Benzene',
+        count: 2,
+      },
+    ];
+    useProductionStore.setState({ generatorBank: bank });
+
+    expect(graph.meta.get('generatorBank')).toEqual(bank);
+  });
+
+  it('tells an untouched bank apart from one emptied on purpose', () => {
+    useProductionStore.setState({ generatorBank: [] });
+    // an empty array is someone deleting every row, and has to survive the
+    // round trip as one — `null` is what means "still following the suggestion"
+    expect(graph.meta.get('generatorBank')).toEqual([]);
+
+    useProductionStore.setState({ generatorBank: null });
+    expect(graph.meta.has('generatorBank')).toBe(false);
+  });
+
+  it('applies a remote bank into the store', () => {
+    graph.doc.transact(
+      () =>
+        graph.meta.set('generatorBank', [
+          {
+            id: 'row-1',
+            categoryId: 'naquadah',
+            tier: 'IV',
+            fuelName: 'Tiberium Rod',
+            count: 1,
+          },
+        ]),
+      'rtdb',
+    );
+
+    expect(useProductionStore.getState().generatorBank).toMatchObject([
+      { categoryId: 'naquadah', tier: 'IV', count: 1 },
+    ]);
+  });
+
+  it('reads a graph with no stored bank as untouched', () => {
+    graph.doc.transact(() => graph.meta.set('generatorBank', []), 'rtdb');
+    graph.doc.transact(() => graph.meta.delete('generatorBank'), 'rtdb');
+
+    expect(useProductionStore.getState().generatorBank).toBeNull();
+  });
+});
+
+describe('binding: switching graphs', () => {
+  it('does not carry a per-graph setting into the next graph', () => {
+    // the sequence session.open() runs: tear the old binding down, reset the
+    // store, then bind the next doc. Getting that order wrong would push the
+    // outgoing graph's settings into the incoming one, which is invisible until
+    // someone opens an unrelated line and finds it running on someone else's
+    // generators
+    const bank = [
+      {
+        id: 'row-1',
+        categoryId: 'gas',
+        tier: 'HV' as const,
+        fuelName: 'Benzene',
+        count: 2,
+      },
+    ];
+    useProductionStore.getState().setGeneratorBank(bank);
+    expect(graph.meta.get('generatorBank')).toEqual(bank);
+
+    binding.destroy();
+    useProductionStore.getState().reset();
+
+    const next = createGraphDoc();
+    const nextBinding = bindStore(next);
+
+    expect(next.meta.get('generatorBank')).toBeUndefined();
+    expect(useProductionStore.getState().generatorBank).toBeNull();
+
+    nextBinding.destroy();
+    next.doc.destroy();
+    // afterEach destroys `binding`; rebind so that stays valid
+    binding = bindStore(graph);
+  });
+});
+
+// The failure this guards against, in the shape it actually took: a dev HMR
+// update replaces the session module without tearing the old session down, so
+// a binding holding graph A's doc is still subscribed to the store when graph B
+// loads into it. Unguarded, it mirrors B's nodes into A and deletes A's own.
+describe('binding: a superseded binding is read-only', () => {
+  it("never writes the newly opened graph into the previous graph's doc", () => {
+    // graph A, with content of its own
+    useProductionStore.setState({ nodes: [node('a1')] });
+    expect(graph.nodes.has('a1')).toBe(true);
+
+    // graph B opens; the old binding is leaked rather than destroyed
+    const next = createGraphDoc();
+    const nextBinding = bindStore(next);
+
+    useProductionStore.setState({ nodes: [node('b1')] });
+
+    expect(next.nodes.has('b1')).toBe(true);
+    // A keeps its own node and never receives B's
+    expect(graph.nodes.has('b1')).toBe(false);
+    expect(graph.nodes.has('a1')).toBe(true);
+
+    nextBinding.destroy();
+  });
+
+  it('leaves the claim free for the next binding when destroyed', () => {
+    const next = createGraphDoc();
+    bindStore(next).destroy();
+
+    const rebound = bindStore(next);
+    useProductionStore.setState({ nodes: [node('n1')] });
+
+    expect(next.nodes.has('n1')).toBe(true);
+    rebound.destroy();
+  });
+
+  it('does not let a new empty graph empty the one it replaces', () => {
+    useProductionStore.setState({ nodes: [node('a1')] });
+
+    // opening a fresh graph pulls its (empty) contents into the store — the
+    // outgoing binding must not read that as "the user deleted everything"
+    const next = createGraphDoc();
+    const nextBinding = bindStore(next);
+
+    expect(useProductionStore.getState().nodes).toEqual([]);
+    expect(graph.nodes.has('a1')).toBe(true);
+
+    nextBinding.destroy();
   });
 });

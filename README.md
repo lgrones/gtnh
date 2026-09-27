@@ -7,9 +7,14 @@ Figma-style multiplayer** so several people can edit the same line at once.
 
 ## What it does
 
-- **Visual production graph** — recipe / input / output / disposal nodes wired
+- **Visual production graph** — recipe / input / output / byproduct nodes wired
   together on an [XYFlow](https://reactflow.dev) canvas. Right-click or hotkeys to
   place nodes; drag to connect.
+- **Collapsible sub-lines** — drop a saved line into another one as a single
+  read-only node (Ctrl+M). It exposes that line's combined I/O as handles and
+  carries its machines, draw and critical path with it, so a big line's totals
+  include everything its sub-lines need. Double-click opens the line behind it;
+  the node holds a capture, and a **Refresh** appears when the source moves on.
 - **Energy planning** — the Energy panel reads demand per voltage tier and sizes a
   bank of generators for a chosen generator type + fuel. The generator choice is
   **saved per graph**.
